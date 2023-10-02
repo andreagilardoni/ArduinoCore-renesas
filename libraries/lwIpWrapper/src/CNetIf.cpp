@@ -1,4 +1,5 @@
 #include "CNetIf.h"
+#include "CNetifStats.h"
 #include <functional>
 
 IPAddress CNetIf::default_ip("192.168.0.10");
@@ -11,6 +12,10 @@ bool CLwipIf::wifi_hw_initialized = false;
 bool CLwipIf::connected_to_access_point = false;
 WifiStatus_t CLwipIf::wifi_status = WL_IDLE_STATUS;
 bool CLwipIf::pending_eth_rx = false;
+
+#ifdef CNETIF_STATS_ENABLED
+struct netif_stats stats[NETWORK_INTERFACES_MAX_NUM];
+#endif
 
 FspTimer CLwipIf::timer;
 
@@ -285,6 +290,7 @@ void CEth::handleEthRx()
      * desired performance
      */
     __disable_irq();
+    NETIF_STATS_RX_TIME_START(stats[NI_ETHERNET]);
 
     volatile uint32_t rx_frame_dim = 0;
     volatile uint8_t* rx_frame_buf = eth_input(&rx_frame_dim);
@@ -299,11 +305,24 @@ void CEth::handleEthRx()
 
             if (ni.input((struct pbuf*)p, &ni) != ERR_OK) {
                 pbuf_free((struct pbuf*)p);
-            }
-        }
 
-        eth_release_rx_buffer();
+                NETIF_STATS_INCREMENT_RX_NI_INPUT_FAILED_CALLS(stats[NI_ETHERNET]);
+                NETIF_STATS_INCREMENT_RX_INTERRUPT_FAILED_CALLS(stats[NI_ETHERNET]);
+            } else {
+                NETIF_STATS_INCREMENT_RX_BYTES(stats[NI_ETHERNET], rx_frame_dim);
+            }
+        } else {
+            NETIF_STATS_INCREMENT_RX_PBUF_ALLOC_FAILED_CALLS(stats[NI_ETHERNET]);
+            NETIF_STATS_INCREMENT_RX_INTERRUPT_FAILED_CALLS(stats[NI_ETHERNET]);
+        }
+    } else {
+        NETIF_STATS_INCREMENT_RX_INTERRUPT_FAILED_CALLS(stats[NI_ETHERNET]);
     }
+
+    eth_release_rx_buffer();
+
+    NETIF_STATS_RX_TIME_AVERAGE(stats[NI_ETHERNET]);
+    NETIF_STATS_INCREMENT_RX_INTERRUPT_CALLS(stats[NI_ETHERNET]);
     __enable_irq();
 }
 
@@ -350,6 +369,8 @@ err_t CEth::output(struct netif* _ni, struct pbuf *p) {
     (void)_ni;
 
     err_t errval = ERR_OK;
+    NETIF_STATS_INCREMENT_TX_TRANSMIT_CALLS(stats[NI_ETHERNET]);
+    NETIF_STATS_TX_TIME_START(stats[NI_ETHERNET]);
 
     if(eth_output_can_transimit()) {
         uint16_t tx_buf_dim = 0;
@@ -362,10 +383,16 @@ err_t CEth::output(struct netif* _ni, struct pbuf *p) {
 
         if (bytes_actually_copied > 0 && !eth_output(tx_buf, bytes_actually_copied)) {
             errval = ERR_IF;
+            NETIF_STATS_INCREMENT_TX_TRANSMIT_FAILED_CALLS(stats[NI_ETHERNET]);
+        } else {
+            NETIF_STATS_INCREMENT_TX_BYTES(stats[NI_ETHERNET], bytes_actually_copied);
         }
     } else {
         errval = ERR_INPROGRESS;
+        NETIF_STATS_INCREMENT_TX_TRANSMIT_FAILED_CALLS(stats[NI_ETHERNET]);
     }
+
+    NETIF_STATS_TX_TIME_AVERAGE(stats[NI_ETHERNET]);
     return errval;
 }
 
@@ -1308,6 +1335,8 @@ void CEth::begin(IPAddress _ip, IPAddress _gw, IPAddress _nm)
     eth_set_rx_frame_cbk(std::bind(&CEth::handleEthRx, this));
     eth_set_link_on_cbk(std::bind(&CEth::setLinkUp, this));
     eth_set_link_off_cbk(std::bind(&CEth::setLinkDown, this));
+
+    NETIF_STATS_INIT(stats[NI_ETHERNET]);
 }
 
 /* -------------------------------------------------------------------------- */
