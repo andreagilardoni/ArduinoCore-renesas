@@ -401,6 +401,10 @@ err_t CWifiStation::output(struct netif* _ni, struct pbuf *p) {
 /* -------------------------------------------------------------------------- */   
     (void)_ni;
     err_t errval = ERR_IF;
+
+    NETIF_STATS_INCREMENT_TX_TRANSMIT_CALLS(stats[NI_WIFI_STATION]);
+    NETIF_STATS_TX_TIME_START(stats[NI_WIFI_STATION]);
+
     uint8_t *buf = new uint8_t[p->tot_len];
     if (buf != nullptr) {
         uint16_t bytes_actually_copied = pbuf_copy_partial(p, buf, p->tot_len, 0);
@@ -408,6 +412,8 @@ err_t CWifiStation::output(struct netif* _ni, struct pbuf *p) {
             int ifn = 0;
             if (CLwipIf::net_ifs[NI_WIFI_STATION] != nullptr) {
                 ifn = CLwipIf::net_ifs[NI_WIFI_STATION]->getId();
+            } else {
+                NETIF_STATS_INCREMENT_TX_TRANSMIT_FAILED_CALLS(stats[NI_WIFI_STATION]);
             }
 
 #ifdef DEBUG_OUTPUT_DISABLED
@@ -422,11 +428,19 @@ err_t CWifiStation::output(struct netif* _ni, struct pbuf *p) {
 
             if (CEspControl::getInstance().sendBuffer(ESP_STA_IF, ifn, buf, bytes_actually_copied) == ESP_CONTROL_OK) {
                 errval = ERR_OK;
+                NETIF_STATS_INCREMENT_TX_BYTES(stats[NI_WIFI_STATION], bytes_actually_copied);
+            } else {
+                NETIF_STATS_INCREMENT_TX_TRANSMIT_FAILED_CALLS(stats[NI_WIFI_STATION]);
             }
+        } else {
+            NETIF_STATS_INCREMENT_TX_TRANSMIT_FAILED_CALLS(stats[NI_WIFI_STATION]);
         }
         delete[] buf;
+    } else {
+
     }
 
+    NETIF_STATS_TX_TIME_AVERAGE(stats[NI_WIFI_STATION]);
     return errval;
 }
 
@@ -1388,6 +1402,8 @@ void CWifiStation::begin(IPAddress _ip, IPAddress _gw, IPAddress _nm)
     /* Set the link callback function, this function is called on change of link status */
     // netif_set_link_callback(&eth0if, eht0if_link_toggle_cbk);
 #endif /* LWIP_NETIF_LINK_CALLBACK */
+
+    NETIF_STATS_INIT(stats[NI_WIFI_STATION]);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1399,6 +1415,8 @@ void CWifiStation::task()
     uint16_t dim = 0;
     uint8_t* buf = nullptr;
     struct pbuf* p = nullptr;
+
+    NETIF_STATS_RX_TIME_START(stats[NI_WIFI_STATION]);
 
     /* shall we verify something about if_num??? */
     do {
@@ -1413,12 +1431,24 @@ void CWifiStation::task()
                 pbuf_take((struct pbuf*)p, (uint8_t*)buf, (uint32_t)dim);
                 if (ni.input(p, &ni) != ERR_OK) {
                     pbuf_free(p);
+
+                    NETIF_STATS_INCREMENT_RX_NI_INPUT_FAILED_CALLS(stats[NI_WIFI_STATION]);
+                    NETIF_STATS_INCREMENT_RX_INTERRUPT_FAILED_CALLS(stats[NI_WIFI_STATION]);
+                } else {
+                    NETIF_STATS_INCREMENT_RX_BYTES(stats[NI_WIFI_STATION], dim);
                 }
                 delete[] buf;
+            } else {
+                NETIF_STATS_INCREMENT_RX_INTERRUPT_FAILED_CALLS(stats[NI_WIFI_STATION]);
+                NETIF_STATS_INCREMENT_RX_PBUF_ALLOC_FAILED_CALLS(stats[NI_WIFI_STATION]);
             }
+        } else {
+            NETIF_STATS_INCREMENT_RX_INTERRUPT_FAILED_CALLS(stats[NI_WIFI_STATION]);
         }
     } while(dim > 0 && p != nullptr);
 
+    NETIF_STATS_RX_TIME_AVERAGE(stats[NI_WIFI_STATION]);
+    NETIF_STATS_INCREMENT_RX_INTERRUPT_CALLS(stats[NI_WIFI_STATION]);
 
 #if LWIP_DHCP
     static unsigned long dhcp_last_time_call = 0;
