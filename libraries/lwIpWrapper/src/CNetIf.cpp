@@ -116,7 +116,9 @@ void CLwipIf::lwip_task()
     }
 
     /* Handle LwIP timeouts */
+    __disable_irq();
     sys_check_timeouts();
+    __enable_irq();
 
     if (willing_to_start_sync_req) {
         timer.disable_overflow_irq();
