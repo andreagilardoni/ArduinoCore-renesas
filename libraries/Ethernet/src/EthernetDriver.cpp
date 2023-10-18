@@ -360,6 +360,14 @@ bool eth_output_can_transimit() {
     return !frame_being_transmitted;
 }
 
+fsp_err_t eth_input(uint8_t** data, uint32_t *dim) {
+    /* NOTE: ZERO COPY IMPLEMENTATION 
+       just the pointer and not the data are copied with the Read Function */
+    
+    fsp_err_t err = R_ETHER_Read(eth_driver.get_ctrl(), data, (uint32_t *)dim);
+    return err;
+}
+
 uint8_t *eth_input(volatile uint32_t *dim) {
     /* NOTE: ZERO COPY IMPLEMENTATION 
        just the pointer and not the data are copied with the Read Function */

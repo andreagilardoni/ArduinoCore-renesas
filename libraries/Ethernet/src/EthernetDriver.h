@@ -13,7 +13,7 @@ using EtherCallback_f        = std::function<void(void)>;
 
 
 #define MAC_ADDRESS_DIM     6
-#define ETH_BUFF_DIM        1536 
+#define ETH_BUFF_DIM        1536
 
 
 /* set the MAC ADDRESS, use the function before the initialization */
@@ -23,6 +23,7 @@ int  eth_get_mac_address(uint8_t *mad);
 bool eth_init();
 void eth_execute_link_process();
 uint8_t *eth_input(volatile uint32_t *dim);
+fsp_err_t eth_input(uint8_t** data, uint32_t *dim);
 bool eth_output(uint8_t *buf, uint16_t dim);
 bool eth_output_can_transimit();
 void eth_release_rx_buffer();
