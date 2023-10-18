@@ -139,9 +139,6 @@ static err_t tcp_recv_callback(void* arg, struct tcp_pcb* tpcb, struct pbuf* p, 
         }
         ret_err = err;
     } else if ((tcp_arg->state == TCP_CONNECTED) || (tcp_arg->state == TCP_ACCEPTED)) {
-        /* Acknowledge data reception */
-        tcp_recved(tpcb, p->tot_len);
-
         if (tcp_arg->data.p == NULL) {
             tcp_arg->data.p = p;
         } else {
@@ -153,9 +150,6 @@ static err_t tcp_recv_callback(void* arg, struct tcp_pcb* tpcb, struct pbuf* p, 
     }
     /* data received when connection already closed */
     else {
-        /* Acknowledge data reception */
-        tcp_recved(tpcb, p->tot_len);
-
         /* free pbuf and do nothing */
         pbuf_free(p);
         ret_err = ERR_OK;

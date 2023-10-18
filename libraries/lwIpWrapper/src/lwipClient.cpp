@@ -159,6 +159,9 @@ int lwipClient::read()
     if ((_tcp_client != NULL) && (_tcp_client->data.p != NULL)) {
         __disable_irq();
         pbuffer_get_data(&(_tcp_client->data), &b, 1);
+
+        // acknowledge data reception
+        tcp_recved(_tcp_client->pcb, 1);
         __enable_irq();
         return b;
     }
@@ -173,6 +176,9 @@ int lwipClient::read(uint8_t* buf, size_t size)
     if ((_tcp_client != NULL) && (_tcp_client->data.p != NULL)) {
         __disable_irq();
         int rv = pbuffer_get_data(&(_tcp_client->data), buf, size);
+
+        // acknowledge data reception FIXME: understand if this should be done here or in pbuffer_get_data
+        tcp_recved(_tcp_client->pcb, rv);
         __enable_irq();
         return rv;
     }
