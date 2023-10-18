@@ -90,13 +90,15 @@ int client_net_recv_timeout( void *ctx, unsigned char *buf,
     unsigned long tms = start + timeout;
     int pending = client->available();
     // If there is data in the client, wait for message completion
-    if((pending > 0) && (pending < len))
-    do {
-        int pending = client->available();
-        if (pending < len && timeout > 0) {
-            delay(1);
-        } else break;
-    } while (millis() < tms);
+    if((pending > 0) && (pending < len)) {
+        do {
+            int pending = client->available();
+            if (pending < len && timeout > 0) {
+                delay(1);
+            } else break;
+            log_e("blocking");
+        } while (millis() < tms);
+    }
     
     int result = client->read(buf, len);
     
