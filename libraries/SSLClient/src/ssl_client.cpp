@@ -19,7 +19,7 @@
 #  error "Please configure IDF framework to include mbedTLS -> Enable pre-shared-key ciphersuites and activate at least one cipher"
 #endif
 
-const char *pers = "esp32-tls";
+const char *pers = "esp32-tls"; // FIXME: should this be changed to c33?
 
 static int _handle_error(int err, const char * file, int line)
 {
