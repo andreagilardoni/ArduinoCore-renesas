@@ -90,7 +90,7 @@ uint16_t pbuffer_get_data(struct pbuf_data* data, uint8_t* buffer, size_t size)
         ptr = data->p;
         offset = ptr->tot_len - data->available;
 
-        /* Get data from p */
+        /* Get data from p FIXME use memcpy instead */
         for (i = 0; (nb < size) && ((offset + i) < ptr->len) && (data->available > 0); i++) {
             buffer[nb] = pbuf_get_at(ptr, offset + i);
             nb++;
