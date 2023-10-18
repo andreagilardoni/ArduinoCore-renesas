@@ -323,6 +323,8 @@ void CEth::handleEthRx()
         NETIF_STATS_INCREMENT_RX_INTERRUPT_FAILED_CALLS(stats[NI_ETHERNET]);
     }
 
+    NETIF_STATS_INCREMENT_ERROR(stats[NI_ETHERNET], err);
+
     eth_release_rx_buffer();
 
     NETIF_STATS_RX_TIME_AVERAGE(stats[NI_ETHERNET]);
