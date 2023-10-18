@@ -294,9 +294,11 @@ void CEth::handleEthRx()
     __disable_irq();
     NETIF_STATS_RX_TIME_START(stats[NI_ETHERNET]);
 
-    volatile uint32_t rx_frame_dim = 0;
-    volatile uint8_t* rx_frame_buf = eth_input(&rx_frame_dim);
-    if (rx_frame_dim > 0 && rx_frame_buf != nullptr) {
+    uint32_t rx_frame_dim = 0;
+    uint8_t* rx_frame_buf = nullptr;
+    fsp_err_t err = eth_input(&rx_frame_buf, &rx_frame_dim);
+
+    if (err == FSP_SUCCESS) {
         struct pbuf* p=nullptr;
 
         p = pbuf_alloc(PBUF_RAW, rx_frame_dim, PBUF_RAM);
