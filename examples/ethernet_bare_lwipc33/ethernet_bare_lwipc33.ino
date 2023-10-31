@@ -82,8 +82,6 @@ uint8_t* buffers[] = {
   rx_buffer2,
   rx_buffer3,
   rx_buffer4
-  // nullptr
-  // , tx_buffer
 };
 
 #define FRAME_NONE 0
