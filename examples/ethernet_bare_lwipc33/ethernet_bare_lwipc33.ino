@@ -343,7 +343,7 @@ void loop() {
   // Handle application FSM
   application();
 
-  if(millis() - debug_start > 2000) { // print the debug _stats every 1 second
+  if(millis() - debug_start > 2000) { // print the debug _stats every x second
     application_report();
 
 #ifdef CNETIF_STATS_ENABLED
