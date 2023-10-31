@@ -37,7 +37,7 @@
  * You can optionally print the metrics yourself, for how to look at netif_stats_sprintf function
  */
 
-#define CNETIF_STATS_ENABLED
+// #define CNETIF_STATS_ENABLED
 #ifdef CNETIF_STATS_ENABLED
 
 #include <stdio.h>

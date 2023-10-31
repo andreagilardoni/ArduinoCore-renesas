@@ -310,10 +310,11 @@ void loop() {
   __disable_irq();
   bool not_empty = !rx_buffers.empty();
   bool release = rx_buffers.size() == 5;
+  NETIF_STATS_CUSTOM_AVERAGE(_stats, "size", rx_buffers.size());
   // if(not_empty) {
   //   Serial.print("->");
   // }
-  for(; !rx_buffers.empty(); rx_buffers.pop_front()) {
+  for(; !not_empty; rx_buffers.pop_front()) {
     auto pair = rx_buffers.front();
 
     struct pbuf *p = pbuf_alloc_populate(pair.first, pair.second);
@@ -344,25 +345,25 @@ void loop() {
   // Handle application FSM
   application();
 
-#ifdef CNETIF_STATS_ENABLED
   if(millis() - debug_start > 2000) { // print the debug _stats every 1 second
-      application_report();
+    application_report();
 
-      netif_stats_sprintf(cnetif_stats_buffer, _stats, STATS_BUFFER_SIZE, (8*1e6)/(1<<20), "Mbit/s");
-      __disable_irq();
-      NETIF_STATS_RESET_AVERAGES(_stats);
-      __enable_irq();
+#ifdef CNETIF_STATS_ENABLED
+    netif_stats_sprintf(cnetif_stats_buffer, _stats, STATS_BUFFER_SIZE, (8*1e6)/(1<<20), "Mbit/s");
+    __disable_irq();
+    NETIF_STATS_RESET_AVERAGES(_stats);
+    __enable_irq();
+    DEBUG_INFO(cnetif_stats_buffer);
+#endif // CNETIF_STATS_ENABLED
 
-      DEBUG_INFO(cnetif_stats_buffer);
     // reset some counters
     debug_start = millis();
   }
-#endif // CNETIF_STATS_ENABLED
 
   uint64_t elapsed = micros()-start;
   // NETIF_STATS_CUSTOM_AVERAGE_UNIT(_stats, "cycle", elapsed, "us");
 
-  float sleep = 0.007 - float(elapsed)/1000;\
+  float sleep = 0.015 - float(elapsed)/1000;
   // DEBUG_INFO("%.6f", sleep);
   if(sleep > 0) {
     delay(sleep);
@@ -675,7 +676,6 @@ inline bool lwip_tcp_read_checks(struct TCPClient* client, uint8_t* buffer, uint
 }
 
 // copy data from lwip buffers to the application level
-// TODO make it possible to provide a termination token
 // FIXME consider synchronization issues while calling this function, interrupts may cause issues
 uint16_t lwip_tcp_read_buffer(struct TCPClient* client, uint8_t* buffer, uint16_t buffer_size) {
 
@@ -880,13 +880,13 @@ void lwip_tcp_connection_close(struct tcp_pcb* tpcb, struct TCPClient* tcp) {
   tcp_err(tpcb, NULL);
   tcp_accept(tpcb, NULL);
 
-  tcp_close(tpcb);
-
+  err_t err = tcp_close(tpcb);
+  // TODO if err != ERR_OK retry, there may be memory issues
   tcp->state = TCP_CLOSING;
 
-  // if(tcp != nullptr) {
-  //   delete tcp; // TODO make sure that this pointer is not shared among other structures
-  // }
+  if(tcp->p != nullptr) {
+    // pbuf_free(tcp->p); // FIXME it happens that a pbuf, with ref == 0 is added for some reason
+  }
 }
 
 // Application level Stuff
@@ -947,7 +947,7 @@ struct App {
   uint32_t last_value=0;
 } app;
 
-void reset_app(struct App& app) {
+void init_app(struct App& app) {
   app.file_length = 0;
   app.http_header = "";
   app.downloaded_bytes = 0;
@@ -955,16 +955,23 @@ void reset_app(struct App& app) {
   app.payload_verify_excess_len = 0;
   app.payload_verify_offset = 0;
   app.last_value=0;
+}
+
+void reset_app(struct App& app) {
+  init_app(app);
 
   // close the TCP connection and http session if open
+  if(app.tcp_client != nullptr && app.tcp_client->state != TCP_CLOSING) {
+    lwip_tcp_connection_close(app.tcp_client->pcb, app.tcp_client);
+  }
+
   if(app.tcp_client != nullptr) {
-    lwip_tcp_connection_close(app.tcp_client);
     delete app.tcp_client;
     app.tcp_client = nullptr;
   }
 }
 
-const char* http_request = "GET /test-1024M HTTP/1.1\nHost: 192.168.10.250\nConnection: close\n\n";
+const char* http_request = "GET /test-256M HTTP/1.1\nHost: 192.168.10.250\nConnection: close\n\n";
 
 void application() {
   bool found = false;
@@ -972,7 +979,7 @@ void application() {
 
   switch(app.current_state) {
   case APP_STATE_NONE:
-    reset_app(app);
+    init_app(app);
 
     // TODO we are not handling link connection and disconnection
     app.prev_state = app.current_state;
@@ -984,7 +991,6 @@ void application() {
 
   case APP_STATE_LINK_UP:
     // The link is up we connect to the server
-    // TODO
     app.tcp_client = new TCPClient;
     lwip_tcp_setup_stack(app.tcp_client);
 
@@ -1156,7 +1162,6 @@ void application() {
     // in this state we reset the application and we start back from the beginning
 
     reset_app(app);
-    delete app.tcp_client;
 
     app.prev_state = app.current_state;
     app.current_state = APP_STATE_LINK_UP;
@@ -1176,7 +1181,7 @@ void application_report(bool force) {
     float elapsed = millis()-app.speed_start;
 
     float speed = (app.speed_bytes / elapsed) * speed_conversion_factor;
-    DEBUG_INFO("Application layer: %u/%u speed: %.2f Mbit/s", app.downloaded_bytes, app.file_length, speed);
+    DEBUG_INFO("Application layer: %12u/%12u speed: %.2f Mbit/s", app.downloaded_bytes, app.file_length, speed);
 
     app.speed_start = millis();
     app.speed_bytes = 0;
