@@ -220,7 +220,7 @@ void setup() {
 
   // Finished setup, starting the runtime
 
-  DEBUG_INFO("status 0x%X", ctrl.p_rx_descriptor->status);
+  // DEBUG_INFO("status 0x%X", ctrl.p_rx_descriptor->status);
   // Open ether
   Serial.println("Ether open");
   err = R_ETHER_Open(&ctrl, &cfg);
