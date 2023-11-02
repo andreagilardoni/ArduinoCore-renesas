@@ -123,6 +123,7 @@ std::deque<std::pair<uint8_t*, uint32_t> > rx_buffers;
 std::deque<struct pbuf*> pbuffs;
 #endif
 
+#define LOOP_MIN_DURATION 1000 // us
 
 /* --------------------------------------- */
 void irq_ether_callback(ether_callback_args_t* p_args);
@@ -352,7 +353,10 @@ void loop() {
   // Handle application FSM
   application();
 
-  if(millis() - debug_start > 2000) { // print the debug _stats every x second
+  if(millis() - debug_start > 3000) { // print the debug _stats every x second
+    // DEBUG_INFO("\n>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>");
+    DEBUG_INFO("time: %12ums", millis());
+    DEBUG_INFO("loop counter %u\n", counter);
     application_report();
 
 #ifdef CNETIF_STATS_ENABLED
@@ -362,19 +366,22 @@ void loop() {
     __enable_irq();
     DEBUG_INFO(cnetif_stats_buffer);
 #endif // CNETIF_STATS_ENABLED
+    // DEBUG_INFO("<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<");
 
+    counter = 0;
     // reset some counters
     debug_start = millis();
   }
 
-  uint64_t elapsed = micros()-start;
-  // NETIF_STATS_CUSTOM_AVERAGE_UNIT(_stats, "cycle", elapsed, "us");
+  uint32_t elapsed = micros()-start;
+  NETIF_STATS_CUSTOM_AVERAGE_UNIT(_stats, "app", elapsed, "us");
 
-  float sleep = 0.015 - float(elapsed)/1000;
-  // DEBUG_INFO("%.6f", sleep);
-  if(sleep > 0) {
-    delay(sleep);
-  }
+  // uint32_t sleep = elapsed >= LOOP_MIN_DURATION ? 0 : LOOP_MIN_DURATION - elapsed;
+  // // // DEBUG_INFO("%.6f", sleep);
+  // if(sleep > 0) {
+  //   delayMicroseconds(sleep);
+  // }
+  counter++;
 }
 
 // Driver Stuff
