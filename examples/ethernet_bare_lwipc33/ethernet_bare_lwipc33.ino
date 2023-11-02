@@ -70,18 +70,20 @@ ip_addr_t gw;
 
 FspTimer timer;
 
+#define ETHERNET_BUFFERS 1
+
 __attribute__((__aligned__(32))) uint8_t rx_buffer0[ETHERNET_BUFFER_SIZE];
 __attribute__((__aligned__(32))) uint8_t rx_buffer1[ETHERNET_BUFFER_SIZE];
 __attribute__((__aligned__(32))) uint8_t rx_buffer2[ETHERNET_BUFFER_SIZE];
 __attribute__((__aligned__(32))) uint8_t rx_buffer3[ETHERNET_BUFFER_SIZE];
 __attribute__((__aligned__(32))) uint8_t rx_buffer4[ETHERNET_BUFFER_SIZE];
 uint8_t tx_buffer[ETHERNET_BUFFER_SIZE];
-uint8_t* buffers[] = {
-  rx_buffer0,
-  rx_buffer1,
-  rx_buffer2,
-  rx_buffer3,
-  rx_buffer4
+uint8_t* buffers[ETHERNET_BUFFERS] = {
+    rx_buffer0
+  // , rx_buffer1
+  // , rx_buffer2
+  // , rx_buffer3
+  // , rx_buffer4
 };
 
 #define FRAME_NONE 0
@@ -92,7 +94,7 @@ uint8_t* buffers[] = {
 volatile uint8_t frame_phase = FRAME_NONE;
 
 const uint8_t tx_descriptors_len = 1;
-const uint8_t rx_descriptors_len = 5;
+const uint8_t rx_descriptors_len = ETHERNET_BUFFERS;
 __attribute__((__aligned__(16))) ether_instance_descriptor_t tx_descriptors[tx_descriptors_len];
 __attribute__((__aligned__(16))) ether_instance_descriptor_t rx_descriptors[rx_descriptors_len];
 
@@ -216,7 +218,12 @@ void setup() {
 
   fsp_err_t err = FSP_SUCCESS;
 
-
+  // For debug purposes print the starting address of the buffers being used
+  Serial.println("Buffers being used (start, end): [");
+  for(uint8_t i=0; i < ETHERNET_BUFFERS; i++) {
+    DEBUG_INFO("\t(0x%08X, 0x%08X)", buffers[i], buffers[i] + ETHERNET_BUFFER_SIZE - 1);
+  }
+  Serial.println("]");
 
   // Finished setup, starting the runtime
 
@@ -299,32 +306,34 @@ void setup() {
   // timer.start();
 }
 
+uint32_t counter =0;
 void loop() {
   // __disable_irq();
-  uint64_t start = micros();
+  uint32_t start = micros();
   // Poll the driver for data
 
 #if !defined(NETIF_INPUT_IN_INTERRUPT) && !defined(PBUF_ALLOC_IN_INTERRUPT)
   __disable_irq();
-  bool not_empty = !rx_buffers.empty();
-  bool release = rx_buffers.size() == 5;
-  NETIF_STATS_CUSTOM_AVERAGE(_stats, "size", rx_buffers.size());
+  // bool not_empty = !rx_buffers.empty();
+  bool release = rx_buffers.size() == ETHERNET_BUFFERS;
+  // NETIF_STATS_CUSTOM_AVERAGE(_stats, "size", rx_buffers.size());
   // if(not_empty) {
   //   Serial.print("->");
   // }
-  for(; !not_empty; rx_buffers.pop_front()) {
+  for(; !rx_buffers.empty(); rx_buffers.pop_front()) {
     auto pair = rx_buffers.front();
 
     struct pbuf *p = pbuf_alloc_populate(pair.first, pair.second);
 
-    if(release) {
-      R_ETHER_BufferRelease(&ctrl);
-    }
     if(p!=nullptr) {
       input_to_netif(p);
     }
   }
+  if(release) {
+    R_ETHER_BufferRelease(&ctrl);
+  }
   __enable_irq();
+
 #elif !defined(NETIF_INPUT_IN_INTERRUPT) && defined(PBUF_ALLOC_IN_INTERRUPT)
   for(; !pbuffs.empty(); pbuffs.pop_front()) {
     input_to_netif(pbuffs.front());
@@ -427,7 +436,7 @@ void read_from_buffer() {
   rx_buffers.push_back(std::pair(rx_frame_buf, rx_frame_dim));
 
   // Version 0 variant a: release the buffer only when there are less than 5 buffers in the deque
-  if(rx_buffers.size() == rx_descriptors_len) {
+  if(rx_buffers.size() == ETHERNET_BUFFERS) {
     _read_from_buffer_end(err, false);
     return;
   }
