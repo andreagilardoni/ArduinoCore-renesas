@@ -52,9 +52,13 @@ ip_addr_t gw;
 #define ETHER_FRAME_TRANSFER_COMPLETED          (1UL << 21)
 #define ETHER_MAGIC_PACKET_DETECTED_MASK        (1UL << 1)
 
+// copied from r_ether.c
+#define ETHER_RD0_RFP1                                  (0x20000000UL)
+#define ETHER_RD0_RFP0                                  (0x10000000UL)
+
 #define ETHERNET_BUFFER_SIZE                    1536
 
-#define ETHERNET_RX_BUFFERS 2
+#define ETHERNET_RX_BUFFERS 5
 
 uint8_t tx_buffer[ETHERNET_BUFFER_SIZE];
 
@@ -92,7 +96,7 @@ void zerocopy_pbuf_free(struct pbuf *p) {
   SYS_ARCH_PROTECT(zerocopy_pbuf_free);
   mem_free(zcpbuf->buffer);
   zcpbuf->buffer = nullptr;
-  mem_free(zcpbuf);
+  mem_free(zcpbuf); // TODO understand if pbuf_free deletes the pbuf
   SYS_ARCH_UNPROTECT(zerocopy_pbuf_free);
 }
 
@@ -137,11 +141,11 @@ struct netif netif;
 
 // #define PBUF_ALLOC_IN_INTERRUPT
 // #define NETIF_INPUT_IN_INTERRUPT
-
-#ifndef PBUF_ALLOC_IN_INTERRUPT
+#define DRIVER_POLLING
+#ifndef PBUF_ALLOC_IN_INTERRUPT && !defined(DRIVER_POLLING)
 std::deque<std::pair<uint8_t*, uint32_t> > rx_buffers;
 #endif
-#if !defined(NETIF_INPUT_IN_INTERRUPT) && !defined(PBUF_ALLOC_IN_INTERRUPT)
+#if !defined(NETIF_INPUT_IN_INTERRUPT) && !defined(PBUF_ALLOC_IN_INTERRUPT) && !defined(DRIVER_POLLING)
 std::deque<struct pbuf*> pbuffs;
 #endif
 
@@ -319,10 +323,62 @@ void loop() {
   // __disable_irq();
   uint32_t start = micros();
   // Poll the driver for data
+#ifdef DRIVER_POLLING
+  // __disable_irq();
+  if(ETHER_RD0_RFP0 == (ctrl.p_rx_descriptor->status & ETHER_RD0_RFP0)) {
+    // DEBUG_INFO("New frame, status %08x", ctrl.p_rx_descriptor->status);
+    // The current rx_descriptor has data to be processed
+    // TODO understand what means this: ETHER_RD0_RFP0 Receive buffer indicated in this descriptor is all of a receive frame (one buffer per frame)
 
-#if !defined(NETIF_INPUT_IN_INTERRUPT) && !defined(PBUF_ALLOC_IN_INTERRUPT)
+    uint32_t rx_frame_dim = 0;
+    uint8_t* rx_frame_buf = nullptr;
+    fsp_err_t err = FSP_SUCCESS;
+    struct pbuf *p = nullptr;
+
+    do {
+      NETIF_STATS_RX_TIME_START(_stats);
+      NETIF_STATS_INCREMENT_RX_INTERRUPT_CALLS(_stats); // FIXME this is a call, but not an interrupt
+      err = R_ETHER_Read(&ctrl, &rx_frame_buf, &rx_frame_dim);
+
+      if(err != FSP_SUCCESS) {
+        NETIF_STATS_INCREMENT_RX_INTERRUPT_FAILED_CALLS(_stats);
+        NETIF_STATS_INCREMENT_ERROR(_stats, err);
+        NETIF_STATS_RX_TIME_AVERAGE(_stats);
+
+
+        // TODO go to the next buffer
+        R_ETHER_BufferRelease(&ctrl);
+        break;
+      }
+      p = pbuf_alloc_populate(rx_frame_buf, rx_frame_dim);
+
+      if(p==nullptr) {
+        NETIF_STATS_INCREMENT_RX_PBUF_ALLOC_FAILED_CALLS(_stats);
+        NETIF_STATS_RX_TIME_AVERAGE(_stats);
+
+        // TODO go to the next buffer
+        R_ETHER_BufferRelease(&ctrl);
+        break;
+      }
+
+      input_to_netif(p);
+
+#ifndef ZERO_COPY
+      R_ETHER_BufferRelease(&ctrl);
+#else
+      // TODO find a way to put a limit into the number of mem_malloc
+      err = R_ETHER_RxBufferUpdate(&ctrl, (uint8_t*)mem_malloc(ETHERNET_BUFFER_SIZE));
+#endif
+      NETIF_STATS_INCREMENT_ERROR(_stats, err);
+      NETIF_STATS_RX_TIME_AVERAGE(_stats);
+      NETIF_STATS_INCREMENT_RX_INTERRUPT_CALLS(_stats);
+    } while(ETHER_RD0_RFP0 == (ctrl.p_rx_descriptor->status & ETHER_RD0_RFP0) && err == FSP_SUCCESS);
+  }
+  // __enable_irq();
+#elif !defined(NETIF_INPUT_IN_INTERRUPT) && !defined(PBUF_ALLOC_IN_INTERRUPT) && !defined(DRIVER_POLLING)
   __disable_irq();
   // bool not_empty = !rx_buffers.empty();
+  // bool release = true;
   bool release = rx_buffers.size() == ETHERNET_RX_BUFFERS;
   // NETIF_STATS_CUSTOM_AVERAGE(_stats, "size", rx_buffers.size());
   // if(not_empty) {
@@ -336,13 +392,15 @@ void loop() {
     if(p!=nullptr) {
       input_to_netif(p);
     }
-  }
-  if(release) {
+    if(release) {
+      DEBUG_INFO("status %08x", ctrl.p_rx_descriptor->status);
 #ifndef ZERO_COPY
-    R_ETHER_BufferRelease(&ctrl);
+      R_ETHER_BufferRelease(&ctrl);
 #else
-    fsp_err_t err = R_ETHER_RxBufferUpdate(&ctrl, (uint8_t*)mem_malloc(ETHERNET_BUFFER_SIZE)); // TODO check error
+      fsp_err_t err = R_ETHER_RxBufferUpdate(
+        &ctrl, (uint8_t*)mem_malloc(ETHERNET_BUFFER_SIZE)); // TODO check error
 #endif
+    }
   }
   __enable_irq();
 
@@ -515,8 +573,6 @@ inline struct pbuf* pbuf_alloc_populate(uint8_t* buffer, uint32_t len) {
   return p;
 }
 
-
-
 inline void input_to_netif(struct pbuf* p) {
   if (netif.input((struct pbuf*)p, &netif) != ERR_OK) {
     pbuf_free((struct pbuf*)p);
@@ -605,7 +661,9 @@ void irq_ether_callback(ether_callback_args_t* p_args){
       }
       if (ETHER_FRAME_RECEIVED_MASK == (reg_eesr & ETHER_FRAME_RECEIVED_MASK)) {
         /* FRAME RECEIVED */
+#ifndef DRIVER_POLLING
         read_from_buffer();
+#endif
       }
       if( (reg_eesr & ADE_BIT_MASK) == ADE_BIT_MASK) {
         /* weird error with ADE bit set as soon as reception is enabled */
@@ -1015,7 +1073,7 @@ void reset_app(struct App& app) {
   }
 }
 
-const char* http_request = "GET /test-256M HTTP/1.1\nHost: 192.168.10.250\nConnection: close\n\n";
+const char* http_request = "GET /test-1024M HTTP/1.1\nHost: 192.168.10.250\nConnection: close\n\n";
 
 void application() {
   bool found = false;
