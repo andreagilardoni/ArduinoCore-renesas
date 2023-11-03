@@ -33,6 +33,7 @@ netif_stats _stats;
 #include <lwIP_Arduino.h>
 #include <lwip/include/lwip/apps/lwiperf.h>
 #include <lwip/include/lwip/tcp.h>
+#include <lwip/include/lwip/mem.h>
 
 #include "FspTimer.h"
 #include "IPAddress.h"
@@ -53,38 +54,59 @@ ip_addr_t gw;
 
 #define ETHERNET_BUFFER_SIZE                    1536
 
-// typedef struct custom_pbuf {
-//   struct pbuf_custom p;
-//   void* payload;
-//   // uint8_t* payload;
-// } zerocopy_pbuf_t;
-//
-// void custom_pbuf_free(pbuf* p) {
-//   // zerocopy_pbuf_t* pbuf = (zerocopy_pbuf_t*) p;
-//
-//   mem_free(p->payload);
-//   p->payload = nullptr;
-// }
-//
-// zerocopy_pbuf_t input_pbuf;
+#define ETHERNET_RX_BUFFERS 2
 
-FspTimer timer;
+uint8_t tx_buffer[ETHERNET_BUFFER_SIZE];
 
-#define ETHERNET_BUFFERS 1
-
+#define ZERO_COPY
+#ifndef ZERO_COPY
 __attribute__((__aligned__(32))) uint8_t rx_buffer0[ETHERNET_BUFFER_SIZE];
 __attribute__((__aligned__(32))) uint8_t rx_buffer1[ETHERNET_BUFFER_SIZE];
 __attribute__((__aligned__(32))) uint8_t rx_buffer2[ETHERNET_BUFFER_SIZE];
 __attribute__((__aligned__(32))) uint8_t rx_buffer3[ETHERNET_BUFFER_SIZE];
 __attribute__((__aligned__(32))) uint8_t rx_buffer4[ETHERNET_BUFFER_SIZE];
-uint8_t tx_buffer[ETHERNET_BUFFER_SIZE];
-uint8_t* buffers[ETHERNET_BUFFERS] = {
+uint8_t* buffers[ETHERNET_RX_BUFFERS] = {
     rx_buffer0
-  // , rx_buffer1
-  // , rx_buffer2
-  // , rx_buffer3
-  // , rx_buffer4
+  , rx_buffer1
+  , rx_buffer2
+  , rx_buffer3
+  , rx_buffer4
 };
+#else
+// TODO it could be a nice idea to define a pool for rx pbufs instead of using mem_malloc
+uint8_t* buffers[ETHERNET_RX_BUFFERS];
+
+typedef struct zerocopy_pbuf {
+  struct pbuf_custom p;
+  ether_instance_descriptor_t *descriptor;
+  uint8_t* buffer;
+} zerocopy_pbuf_t;
+
+void zerocopy_pbuf_free(struct pbuf *p) {
+  SYS_ARCH_DECL_PROTECT(zerocopy_pbuf_free);
+  zerocopy_pbuf_t* zcpbuf = (zerocopy_pbuf_t*) p;
+
+  // reset DMA descriptor
+
+  // FIXME mem_free Assertion "mem_free: illegal memory: double free" failed at line
+  SYS_ARCH_PROTECT(zerocopy_pbuf_free);
+  mem_free(zcpbuf->buffer);
+  zcpbuf->buffer = nullptr;
+  mem_free(zcpbuf);
+  SYS_ARCH_UNPROTECT(zerocopy_pbuf_free);
+}
+
+inline zerocopy_pbuf_t* get_zerocopy_pbuf(uint8_t *buffer, ether_instance_descriptor_t *descriptor=nullptr) {
+  zerocopy_pbuf_t* p = (zerocopy_pbuf_t*)mem_malloc(sizeof(zerocopy_pbuf_t));
+  p->descriptor = descriptor;
+  p->buffer = buffer;
+  p->p.custom_free_function = zerocopy_pbuf_free;
+
+  return p;
+}
+
+#endif
+// FspTimer timer;
 
 #define FRAME_NONE 0
 #define FRAME_IN_TRANSMISSION 1
@@ -94,7 +116,7 @@ uint8_t* buffers[ETHERNET_BUFFERS] = {
 volatile uint8_t frame_phase = FRAME_NONE;
 
 const uint8_t tx_descriptors_len = 1;
-const uint8_t rx_descriptors_len = ETHERNET_BUFFERS;
+const uint8_t rx_descriptors_len = ETHERNET_RX_BUFFERS;
 __attribute__((__aligned__(16))) ether_instance_descriptor_t tx_descriptors[tx_descriptors_len];
 __attribute__((__aligned__(16))) ether_instance_descriptor_t rx_descriptors[rx_descriptors_len];
 
@@ -204,7 +226,6 @@ void setup() {
   cfg.p_mac_address                   = macaddress;
   cfg.num_tx_descriptors              = tx_descriptors_len;
   cfg.num_rx_descriptors              = rx_descriptors_len;
-  // cfg.pp_ether_buffers                = nullptr;
   cfg.pp_ether_buffers                = buffers;
   cfg.ether_buffer_size               = ETHERNET_BUFFER_SIZE;
   cfg.irq                             = FSP_INVALID_VECTOR;
@@ -221,8 +242,12 @@ void setup() {
 
   // For debug purposes print the starting address of the buffers being used
   Serial.println("Buffers being used (start, end): [");
-  for(uint8_t i=0; i < ETHERNET_BUFFERS; i++) {
-    DEBUG_INFO("\t(0x%08X, 0x%08X)", buffers[i], buffers[i] + ETHERNET_BUFFER_SIZE - 1);
+  for(uint8_t i=0; i < ETHERNET_RX_BUFFERS; i++) {
+#ifdef ZERO_COPY
+    buffers[i] = (uint8_t*)mem_malloc(ETHERNET_BUFFER_SIZE);
+#endif
+    DEBUG_INFO("\t(0x%08X, 0x%08X)",
+      buffers[i], buffers[i] + ETHERNET_BUFFER_SIZE - 1);
   }
   Serial.println("]");
 
@@ -237,24 +262,6 @@ void setup() {
     Serial.print("Error opening ");
     Serial.println(err);
   }
-
-  // // setup buffers
-  // input_pbuf.p.custom_free_function = custom_pbuf_free;
-  // // input_pbuf.payload = mem_malloc(ETHERNET_BUFFER_SIZE);
-  // input_pbuf.payload = rx_buffer;
-  //
-  // if(input_pbuf.payload == nullptr) {
-  //   DEBUG_ERROR("Error allocing the input buffer");
-  //   return;
-  // }
-  // DEBUG_INFO("buffer at 0x%X, status 0x%x", input_pbuf.payload, ctrl.p_rx_descriptor->status);
-  // err = R_ETHER_RxBufferUpdate(&ctrl, input_pbuf.payload);
-  // DEBUG_INFO("status 0x%X", ctrl.p_rx_descriptor->status);
-  //
-  // if(err != FSP_SUCCESS) {
-  //   DEBUG_ERROR("Error setting zero copy buffer: %d", err);
-  //   return;
-  // }
 
   // HAL_ETH_ReadPHYRegister(&EthHandle, PHY_IMR, &regvalue);
   //
@@ -316,7 +323,7 @@ void loop() {
 #if !defined(NETIF_INPUT_IN_INTERRUPT) && !defined(PBUF_ALLOC_IN_INTERRUPT)
   __disable_irq();
   // bool not_empty = !rx_buffers.empty();
-  bool release = rx_buffers.size() == ETHERNET_BUFFERS;
+  bool release = rx_buffers.size() == ETHERNET_RX_BUFFERS;
   // NETIF_STATS_CUSTOM_AVERAGE(_stats, "size", rx_buffers.size());
   // if(not_empty) {
   //   Serial.print("->");
@@ -331,7 +338,11 @@ void loop() {
     }
   }
   if(release) {
+#ifndef ZERO_COPY
     R_ETHER_BufferRelease(&ctrl);
+#else
+    fsp_err_t err = R_ETHER_RxBufferUpdate(&ctrl, (uint8_t*)mem_malloc(ETHERNET_BUFFER_SIZE)); // TODO check error
+#endif
   }
   __enable_irq();
 
@@ -409,7 +420,15 @@ inline void _read_from_buffer_end(const fsp_err_t &err, bool release=true) {
   NETIF_STATS_INCREMENT_ERROR(_stats, err);
 
   if(release) {
+#ifndef ZERO_COPY
     R_ETHER_BufferRelease(&ctrl);
+#else
+    fsp_err_t err = R_ETHER_RxBufferUpdate(
+      &ctrl,
+      (uint8_t*)mem_malloc(ETHERNET_BUFFER_SIZE)); // TODO check error
+
+    NETIF_STATS_INCREMENT_ERROR(_stats, err);
+#endif
   }
 
   NETIF_STATS_RX_TIME_AVERAGE(_stats);
@@ -443,7 +462,7 @@ void read_from_buffer() {
   rx_buffers.push_back(std::pair(rx_frame_buf, rx_frame_dim));
 
   // Version 0 variant a: release the buffer only when there are less than 5 buffers in the deque
-  if(rx_buffers.size() == ETHERNET_BUFFERS) {
+  if(rx_buffers.size() == ETHERNET_RX_BUFFERS) {
     _read_from_buffer_end(err, false);
     return;
   }
@@ -473,7 +492,7 @@ void read_from_buffer() {
 
 inline struct pbuf* pbuf_alloc_populate(uint8_t* buffer, uint32_t len) {
   struct pbuf* p=nullptr;
-
+#ifndef ZERO_COPY
   p = pbuf_alloc(PBUF_RAW, len, PBUF_RAM);
 
   if (p == nullptr) {
@@ -484,8 +503,19 @@ inline struct pbuf* pbuf_alloc_populate(uint8_t* buffer, uint32_t len) {
     pbuf_take((struct pbuf*)p, (uint8_t*)buffer, (uint32_t)len);
   }
 
+#else
+  // buffer is allocated with mem_malloc, hence we can trim it down to the needed size
+  // mem_trim(buffer, len); // FIXME Assertion "mem_trim: legal memory" failed at line 722
+
+  zerocopy_pbuf_t *custom_pbuf = get_zerocopy_pbuf(buffer);
+
+  p = pbuf_alloced_custom(
+    PBUF_RAW, len, PBUF_RAM, &custom_pbuf->p, buffer, len);
+#endif
   return p;
 }
+
+
 
 inline void input_to_netif(struct pbuf* p) {
   if (netif.input((struct pbuf*)p, &netif) != ERR_OK) {
