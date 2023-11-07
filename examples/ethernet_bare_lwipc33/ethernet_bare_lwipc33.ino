@@ -891,8 +891,8 @@ inline void lwip_tcp_read_free_pbuf_chain(struct TCPClient* client, uint16_t cop
   // and if we haven't copied entirely the first pbuf (prev == nullptr) (head == last)
   // if we reached the end of the chain set the client pbuf pointer to nullptr
   if(prev != nullptr && last != nullptr) {
-    pbuf_ref(last); // increase the reference of the last element, in order for it to not get freed
-    client->p = pbuf_dechain(prev);
+    prev->next = nullptr;
+    client->p = last;
   } if(last == nullptr) {
     client->p = nullptr;
   }
@@ -972,12 +972,12 @@ err_t lwip_tcp_recv_callback(void* arg, struct tcp_pcb* tpcb, struct pbuf* p, er
   if(tcp_arg->state == TCP_CONNECTED) {
     __disable_irq();
     if (tcp_arg->p == nullptr) {
-      // pbuf_ref(p);
-      // DEBUG_INFO("first element in pbuf chain, refs: %u", p->ref);
+      // no need to increment the references of the pbuf,
+      // since it is already 1 and lwip shifts the control to this code
       tcp_arg->p = p;
     } else {
       // DEBUG_INFO("pbuf_cat %u, %u, %X", tcp_arg->p->len, tcp_arg->p->tot_len, tcp_arg->p->next);
-      // pbuf_chain(tcp_arg->p, p); // we have to use chain, because tcp_arg->p counts as a reference of the chain
+      // pbuf_chain(tcp_arg->p, p);
 
       // no need to increment the references of p, since it is already 1 and the only reference is tcp_arg->p->next
       pbuf_cat(tcp_arg->p, p);
