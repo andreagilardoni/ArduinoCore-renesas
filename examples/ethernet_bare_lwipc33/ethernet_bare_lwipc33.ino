@@ -55,10 +55,11 @@ ip_addr_t gw;
 // copied from r_ether.c
 #define ETHER_RD0_RFP1                                  (0x20000000UL)
 #define ETHER_RD0_RFP0                                  (0x10000000UL)
+#define ETHER_RD0_RACT                                  (0x80000000UL)
 
 #define ETHERNET_BUFFER_SIZE                    1536
 
-#define ETHERNET_RX_BUFFERS 5
+#define ETHERNET_RX_BUFFERS 10
 
 uint8_t tx_buffer[ETHERNET_BUFFER_SIZE];
 
@@ -79,11 +80,15 @@ uint8_t* buffers[ETHERNET_RX_BUFFERS] = {
 #else
 // TODO it could be a nice idea to define a pool for rx pbufs instead of using mem_malloc
 uint8_t* buffers[ETHERNET_RX_BUFFERS];
+uint32_t memory_used=ETHERNET_RX_BUFFERS*ETHERNET_BUFFER_SIZE;
+uint32_t memory_used_max=ETHERNET_RX_BUFFERS*ETHERNET_BUFFER_SIZE;
+uint32_t memory_used_min=ETHERNET_RX_BUFFERS*ETHERNET_BUFFER_SIZE;
 
 typedef struct zerocopy_pbuf {
   struct pbuf_custom p;
   ether_instance_descriptor_t *descriptor;
   uint8_t* buffer;
+  uint16_t size;
 } zerocopy_pbuf_t;
 
 void zerocopy_pbuf_free(struct pbuf *p) {
@@ -94,18 +99,23 @@ void zerocopy_pbuf_free(struct pbuf *p) {
 
   // FIXME mem_free Assertion "mem_free: illegal memory: double free" failed at line
   SYS_ARCH_PROTECT(zerocopy_pbuf_free);
+  // DEBUG_INFO("free %u", p->len);
+
+  memory_used -= zcpbuf->size;
+  memory_used_min = memory_used < memory_used_min? memory_used : memory_used_min;
+
   mem_free(zcpbuf->buffer);
   zcpbuf->buffer = nullptr;
   mem_free(zcpbuf); // TODO understand if pbuf_free deletes the pbuf
   SYS_ARCH_UNPROTECT(zerocopy_pbuf_free);
 }
 
-inline zerocopy_pbuf_t* get_zerocopy_pbuf(uint8_t *buffer, ether_instance_descriptor_t *descriptor=nullptr) {
+inline zerocopy_pbuf_t* get_zerocopy_pbuf(uint8_t *buffer, uint16_t size, ether_instance_descriptor_t *descriptor=nullptr) {
   zerocopy_pbuf_t* p = (zerocopy_pbuf_t*)mem_malloc(sizeof(zerocopy_pbuf_t));
   p->descriptor = descriptor;
   p->buffer = buffer;
   p->p.custom_free_function = zerocopy_pbuf_free;
-
+  p->size = size;
   return p;
 }
 
@@ -325,7 +335,8 @@ void loop() {
   // Poll the driver for data
 #ifdef DRIVER_POLLING
   // __disable_irq();
-  if(ETHER_RD0_RFP0 == (ctrl.p_rx_descriptor->status & ETHER_RD0_RFP0)) {
+  // if(ETHER_RD0_RFP0 == (ctrl.p_rx_descriptor->status & ETHER_RD0_RFP0)) {
+  if(ETHER_RD0_RACT != (ctrl.p_rx_descriptor->status & ETHER_RD0_RACT)) {
     // DEBUG_INFO("New frame, status %08x", ctrl.p_rx_descriptor->status);
     // The current rx_descriptor has data to be processed
     // TODO understand what means this: ETHER_RD0_RFP0 Receive buffer indicated in this descriptor is all of a receive frame (one buffer per frame)
@@ -352,7 +363,7 @@ void loop() {
       }
       p = pbuf_alloc_populate(rx_frame_buf, rx_frame_dim);
 
-      if(p==nullptr) {
+      if(p == nullptr) {
         NETIF_STATS_INCREMENT_RX_PBUF_ALLOC_FAILED_CALLS(_stats);
         NETIF_STATS_RX_TIME_AVERAGE(_stats);
 
@@ -367,12 +378,18 @@ void loop() {
       R_ETHER_BufferRelease(&ctrl);
 #else
       // TODO find a way to put a limit into the number of mem_malloc
+      // FIXME mem_malloc could return nullptr if no space is availabe
+      // DEBUG_INFO("mem_malloc: %u", ETHERNET_BUFFER_SIZE);
+      memory_used += ETHERNET_BUFFER_SIZE;
+      memory_used_max = memory_used > memory_used_max? memory_used : memory_used_max;
+
       err = R_ETHER_RxBufferUpdate(&ctrl, (uint8_t*)mem_malloc(ETHERNET_BUFFER_SIZE));
 #endif
       NETIF_STATS_INCREMENT_ERROR(_stats, err);
       NETIF_STATS_RX_TIME_AVERAGE(_stats);
       NETIF_STATS_INCREMENT_RX_INTERRUPT_CALLS(_stats);
-    } while(ETHER_RD0_RFP0 == (ctrl.p_rx_descriptor->status & ETHER_RD0_RFP0) && err == FSP_SUCCESS);
+    // } while(ETHER_RD0_RFP0 == (ctrl.p_rx_descriptor->status & ETHER_RD0_RFP0) && err == FSP_SUCCESS);
+    } while(ETHER_RD0_RACT != (ctrl.p_rx_descriptor->status & ETHER_RD0_RACT));
   }
   // __enable_irq();
 #elif !defined(NETIF_INPUT_IN_INTERRUPT) && !defined(PBUF_ALLOC_IN_INTERRUPT) && !defined(DRIVER_POLLING)
@@ -425,6 +442,8 @@ void loop() {
   if(millis() - debug_start > 3000) { // print the debug _stats every x second
     // DEBUG_INFO("\n>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>");
     DEBUG_INFO("time: %12ums", millis());
+    DEBUG_INFO("memory: %12u bytes \tmin: %12u bytes \tmax: %12u bytes",
+      memory_used, memory_used_min, memory_used_max);
     DEBUG_INFO("loop counter %u\n", counter);
     application_report();
 
@@ -564,8 +583,11 @@ inline struct pbuf* pbuf_alloc_populate(uint8_t* buffer, uint32_t len) {
 #else
   // buffer is allocated with mem_malloc, hence we can trim it down to the needed size
   // mem_trim(buffer, len); // FIXME Assertion "mem_trim: legal memory" failed at line 722
-
-  zerocopy_pbuf_t *custom_pbuf = get_zerocopy_pbuf(buffer);
+  // // DEBUG_INFO("trim %u", (ETHERNET_BUFFER_SIZE - len));
+  // memory_used = memory_used - (ETHERNET_BUFFER_SIZE - len);
+  // memory_used_min = memory_used < memory_used_min? memory_used : memory_used_min;
+  // zerocopy_pbuf_t *custom_pbuf = get_zerocopy_pbuf(buffer, len);
+  zerocopy_pbuf_t *custom_pbuf = get_zerocopy_pbuf(buffer, ETHERNET_BUFFER_SIZE);
 
   p = pbuf_alloced_custom(
     PBUF_RAW, len, PBUF_RAM, &custom_pbuf->p, buffer, len);
@@ -1294,8 +1316,11 @@ void application_final_report() {
   // float speed_conversion_factor = 10e3/(1<<10);
   float speed_conversion_factor = 1e3*8/float(1<<20);
 
-  float speed = (app.downloaded_bytes / (millis()-app.start) ) * speed_conversion_factor;
-  DEBUG_INFO("Average application layer speed: %.2f Mbit/s", speed);
+  float elapsed = millis()-app.start;
+  float speed = (app.downloaded_bytes / elapsed) * speed_conversion_factor;
+  DEBUG_INFO(
+    "Application layer: Downloaded %u MB in %.2fs average speed: %.2f Mbit/s",
+    app.downloaded_bytes>>20, elapsed/1000, speed);
 }
 
 // payload checking function
