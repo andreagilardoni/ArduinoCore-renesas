@@ -1079,6 +1079,7 @@ void init_app(struct App& app) {
   app.payload_verify_excess_len = 0;
   app.payload_verify_offset = 0;
   app.last_value=0;
+  app.speed_bytes = 0;
 }
 
 void reset_app(struct App& app) {
