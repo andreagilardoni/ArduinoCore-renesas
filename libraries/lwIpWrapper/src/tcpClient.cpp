@@ -14,14 +14,7 @@ LWIPTCPClient::LWIPTCPClient() {
 
 LWIPTCPClient::~LWIPTCPClient() {
 
-    // these calls should already be present in tcp_close
-    if(pcb != nullptr) {
-        // TODO free
-    }
-
-    if(pbuf_head != nullptr ) {
-        // TODO free
-    }
+    this->stop();
 }
 
 int LWIPTCPClient::connect(IPAddress ip, uint16_t port) {
