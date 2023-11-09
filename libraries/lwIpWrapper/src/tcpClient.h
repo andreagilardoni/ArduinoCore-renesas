@@ -6,7 +6,7 @@ using TCPClient = LWIPTCPClient;
 
 // TODO define error codes in an enum
 
-class LWIPTCPClient { // : interfaces::TCPClient
+class LWIPTCPClient: Client { // : interfaces::TCPClient // TODO we probably need to import Client class definition
 public:
     LWIPTCPClient();
     // LWIPTCPClient(struct tcp_struct* tcpClient); // FIXME this should be a private constructor, friend of Server

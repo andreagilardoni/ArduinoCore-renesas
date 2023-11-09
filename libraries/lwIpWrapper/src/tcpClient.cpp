@@ -76,7 +76,7 @@ err_t LWIPTCPClient::_connected_callback(struct tcp_pcb* tpcb, err_t err) {
     // tcp_sent(tpcb, _lwip_tcp_sent_callback); // FIXME implement this: do we actually need it?
 
     /* initialize LwIP tcp_err callback function */
-    // tcp_err(tpcb, lwip_tcp_err_callback); // initialized befor, because we may get error during connection
+    // tcp_err(tpcb, lwip_tcp_err_callback); // initialized before, because we may get error during connection
 
     // TODO understand if this could be helpful
     // tcp_poll(tpcb, NULL, 0);
@@ -269,51 +269,51 @@ void LWIPTCPClient::stop() {
 
 // This function is useful for protocol that provide sequence delimiter, like http,
 // this allows the user to avoid using temporary buffers
-uint16_t lwip_tcp_read_buffer_until_token(
-    struct TCPClient* client, uint8_t* buffer, uint16_t buffer_size, char* token, bool &found) {
+// uint16_t lwip_tcp_read_buffer_until_token(
+//     struct TCPClient* client, uint8_t* buffer, uint16_t buffer_size, char* token, bool &found) {
 
-    if(lwip_tcp_read_checks(client, buffer, buffer_size)) {
-        return 0; // TODO extend checks and make them a general inline function
-    }
+//     if(lwip_tcp_read_checks(client, buffer, buffer_size)) {
+//         return 0; // TODO extend checks and make them a general inline function
+//     }
 
-    // TODO check that the buffer size is less than the token len
+//     // TODO check that the buffer size is less than the token len
 
-    uint16_t offset=client->pbuf_offset;
-    /* iterate over pbufs until:
-    * - the first occurrence of token
-    * - the provided buffer is full
-    * - the available pbufs have been consumed
-    */
-    size_t tkn_len = strlen(token);
+//     uint16_t offset=client->pbuf_offset;
+//     /* iterate over pbufs until:
+//     * - the first occurrence of token
+//     * - the provided buffer is full
+//     * - the available pbufs have been consumed
+//     */
+//     size_t tkn_len = strlen(token);
 
-    // FIXME if we have already found the token we hare wasting time to check the entire buffer again
-    uint16_t position = pbuf_memfind(client->p, token, tkn_len, client->pbuf_offset); // TODO check efficiency of this function
-    uint16_t buf_copy_len = buffer_size;
+//     // FIXME if we have already found the token we hare wasting time to check the entire buffer again
+//     uint16_t position = pbuf_memfind(client->p, token, tkn_len, client->pbuf_offset); // TODO check efficiency of this function
+//     uint16_t buf_copy_len = buffer_size;
 
-    // TODO triple check the indices of these conditions
-    if(position != 0xffff && position + tkn_len <= buffer_size) { // TODO consider how to handle the case that the chain is long 0xffff
-        // We found the token and it fits the user provided buffer
-        buf_copy_len = position + tkn_len;
-        found = true;
-    } else if(position != 0xffff && position < buffer_size && position + tkn_len > buffer_size) {
-        // if the token is found and fits partially with the user provided buffer
-        buf_copy_len = position - 1; // copy without consuming the token
-        found = false;
-    } else {
-        /*
-         * we cover 2 cases here:
-         * - we didn't find the token
-         * - we found the token, but it doesn't fit the user provided buffer
-         */
-        found = false;
-    }
+//     // TODO triple check the indices of these conditions
+//     if(position != 0xffff && position + tkn_len <= buffer_size) { // TODO consider how to handle the case that the chain is long 0xffff
+//         // We found the token and it fits the user provided buffer
+//         buf_copy_len = position + tkn_len;
+//         found = true;
+//     } else if(position != 0xffff && position < buffer_size && position + tkn_len > buffer_size) {
+//         // if the token is found and fits partially with the user provided buffer
+//         buf_copy_len = position - 1; // copy without consuming the token
+//         found = false;
+//     } else {
+//         /*
+//          * we cover 2 cases here:
+//          * - we didn't find the token
+//          * - we found the token, but it doesn't fit the user provided buffer
+//          */
+//         found = false;
+//     }
 
-    uint16_t copied = pbuf_copy_partial(client->p, buffer, buf_copy_len, client->pbuf_offset);
+//     uint16_t copied = pbuf_copy_partial(client->p, buffer, buf_copy_len, client->pbuf_offset);
 
-    lwip_tcp_read_free_pbuf_chain(client, copied);
+//     lwip_tcp_read_free_pbuf_chain(client, copied);
 
-    return copied;
-}
+//     return copied;
+// }
 
 // callback function that should be called when data has successfully been received (i.e., acknowledged)
 // by the remote host. The len argument passed to the callback function gives the amount bytes that
