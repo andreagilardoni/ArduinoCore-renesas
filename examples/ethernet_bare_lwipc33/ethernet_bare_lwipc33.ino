@@ -30,14 +30,19 @@ netif_stats _stats;
 // #include <lwip/timeouts.h>
 // #include <lwip/udp.h>
 // #include <netif/ethernet.h>
-#include <lwIP_Arduino.h>
+// #include <lwIP_Arduino.h>
+// #include <lwip/include/lwip/tcp.h>
+// #include <lwip/include/lwip/mem.h>
+#include <CNetIf.h>
 #include <lwip/include/lwip/apps/lwiperf.h>
-#include <lwip/include/lwip/tcp.h>
-#include <lwip/include/lwip/mem.h>
+// #include <lwip/apps/lwiperf.h>
 
 #include "FspTimer.h"
 #include "IPAddress.h"
 
+#define     SYS_ARCH_DECL_PROTECT(x)
+#define     SYS_ARCH_PROTECT(x)       noInterrupts()
+#define     SYS_ARCH_UNPROTECT(x)     interrupts()
 // IPAddress default_ip("192.168.10.130");
 // IPAddress default_nm("255.255.255.0");
 // IPAddress default_gw("192.168.10.1");
@@ -59,7 +64,7 @@ ip_addr_t gw;
 
 #define ETHERNET_BUFFER_SIZE                    1536
 
-#define ETHERNET_RX_BUFFERS 10
+#define ETHERNET_RX_BUFFERS 2
 
 uint8_t tx_buffer[ETHERNET_BUFFER_SIZE];
 
@@ -159,7 +164,7 @@ std::deque<std::pair<uint8_t*, uint32_t> > rx_buffers;
 std::deque<struct pbuf*> pbuffs;
 #endif
 
-#define LOOP_MIN_DURATION 1000 // us
+#define LOOP_MIN_DURATION 100 // us
 
 /* --------------------------------------- */
 void irq_ether_callback(ether_callback_args_t* p_args);
@@ -465,7 +470,7 @@ void loop() {
   NETIF_STATS_CUSTOM_AVERAGE_UNIT(_stats, "app", elapsed, "us");
 
   // uint32_t sleep = elapsed >= LOOP_MIN_DURATION ? 0 : LOOP_MIN_DURATION - elapsed;
-  // // // DEBUG_INFO("%.6f", sleep);
+  // // DEBUG_INFO("%.6f", sleep);
   // if(sleep > 0) {
   //   delayMicroseconds(sleep);
   // }
@@ -1042,7 +1047,7 @@ static const char* state_strings[] = {
   "APP_STATE_RESET"
 };
 
-#define APP_BUFFER_SIZE 10*1024
+#define APP_BUFFER_SIZE 1*1024
 
 
 struct App {
