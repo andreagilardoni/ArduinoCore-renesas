@@ -1,36 +1,76 @@
 #pragma once
 
+#include <stdint.h>
 #include "r_ether_phy_api.h"
 #include "r_ether_phy.h"
 #include "r_ether_api.h"
 #include "r_ether.h"
 #include <functional>
 
-using EtherCallback_f        = std::function<void(void)>;
-
-#define ETHERNET_IRQ_PRIORITY   10
 
 
-#define MAC_ADDRESS_DIM     6
-#define ETH_BUFF_DIM        1536
+enum network_driver_send_flags_t: uint8_t {
+    NETWORK_DRIVER_SEND_FLAGS_NONE      = 0,
+    // this option instructs the send function that it doesn't need to perform a memcpy to the passed argument
+    // and is in charge of deleting the buffer
+    NETWORK_DRIVER_SEND_FLAGS_ZERO_COPY = 1
+};
+
+enum network_driver_send_err_t: uint8_t {
+    NETWORK_DRIVER_SEND_ERR_OK      = 0,
+    NETWORK_DRIVER_SEND_ERR_MEM     = 1, // memory issues when trying to send a packet
+    NETWORK_DRIVER_SEND_ERR_BUFFER  = 2, // there is no available buffer for sending the packet
+    NETWORK_DRIVER_SEND_ERR_DRIVER  = 3  // generic error happening at fsp level
+};
 
 
-/* set the MAC ADDRESS, use the function before the initialization */
-void eth_set_mac_address(const uint8_t *mad);
-int  eth_get_mac_address(uint8_t *mad);
+class NetworkDriver {
+public:
+    NetworkDriver() {};
+    virtual ~NetworkDriver() {};
 
-bool eth_init();
-void eth_execute_link_process();
-uint8_t *eth_input(volatile uint32_t *dim);
-fsp_err_t eth_input(uint8_t** data, uint32_t *dim);
-bool eth_output(uint8_t *buf, uint16_t dim);
-bool eth_output_can_transimit();
-void eth_release_rx_buffer();
-uint8_t *eth_get_tx_buffer(uint16_t *size);
-void eth_set_rx_frame_cbk(EtherCallback_f fn);
-void eth_set_tx_frame_cbk(EtherCallback_f fn);
-void eth_set_link_on_cbk(EtherCallback_f fn);
-void eth_set_link_off_cbk(EtherCallback_f fn);
-void eth_set_lan_wake_up_cbk(EtherCallback_f fn);
-void eth_set_magic_packet_cbk(EtherCallback_f fn);
+    /*
+     * This function is used by the Interface handling the driver,
+     * if used in polling mode, leave empty definition if the driver works though interrupts.
+     * When working with interrupts it is expected that the constructor definces them
+     */
+    virtual void poll() {}; // TODO is it better to have a function pointer, that when set to null is not called?
 
+    /*
+     * This function is used to inistialize the driver at runtime and start using it
+     */
+    virtual void begin() = 0;
+
+    /*
+     * this function is used to send data to the network
+     * + flags are used to specify additional options when sending
+     * + when NETWORK_DRIVER_SEND_FLAGS_ZERO_COPY is provided, a free function must be passed, [default libc free()]
+     */
+    virtual network_driver_send_err_t send(uint8_t* data, uint16_t len,
+        network_driver_send_flags_t flags=NETWORK_DRIVER_SEND_FLAGS_NONE,
+        void(*free_function)(void*)=free) = 0;
+
+    /*
+     * Sets the callback funtion that is then used to consume incoming data
+     */
+    virtual void setConsumeCallback(std::function<void(uint8_t*, size_t)> consume_cbk) {this->consume_cbk = consume_cbk;}
+
+    /*
+     * FIXME define interfaces for RX zero copy
+     */
+
+
+    /*
+     * The following functions should set the low level interface to up or down state
+     */
+    virtual void up() = 0;
+    virtual void down() = 0;
+
+    // TODO define callback functions for generic functionalities a network driver has to cope with, like link_up event
+protected:
+    std::function<void(uint8_t*, size_t)> consume_cbk; // TODO move in callbacks
+
+    std::function<void()> tx_frame_cbk;
+    std::function<void()> link_up_cbk;
+    std::function<void()> link_down_cbk;
+};
