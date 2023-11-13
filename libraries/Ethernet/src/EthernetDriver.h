@@ -1,5 +1,4 @@
-#ifndef _ARDUINO_RENESAS_ETHERNET_DRIVER_
-#define _ARDUINO_RENESAS_ETHERNET_DRIVER_
+#pragma once
 
 #include "r_ether_phy_api.h"
 #include "r_ether_phy.h"
@@ -35,5 +34,3 @@ void eth_set_link_off_cbk(EtherCallback_f fn);
 void eth_set_lan_wake_up_cbk(EtherCallback_f fn);
 void eth_set_magic_packet_cbk(EtherCallback_f fn);
 
-
-#endif
