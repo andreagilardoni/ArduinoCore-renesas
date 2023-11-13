@@ -202,13 +202,7 @@ public:
 
     virtual int getMacAddress(uint8_t* mac) = 0;
 
-    /* default dummy implementation because ethernet does not have that */
-    virtual const char* getSSID() { return nullptr; }
-    virtual uint8_t* getBSSID(uint8_t* bssid) { return nullptr; }
-    virtual int32_t getRSSI() { return 0; }
-    virtual uint8_t getEncryptionType() { return 0; }
-
-   friend class CWifi;
+    friend class CWifi;
 };
 
 /* -------------------------------------------------------------------------- */
@@ -264,10 +258,10 @@ public:
 
     virtual int getMacAddress(uint8_t* mac) override;
 
-    virtual const char* getSSID() override;
-    virtual uint8_t* getBSSID(uint8_t* bssid) override;
-    virtual int32_t getRSSI() override;
-    virtual uint8_t getEncryptionType() override;
+    virtual const char* getSSID();
+    virtual uint8_t* getBSSID(uint8_t* bssid);
+    virtual int32_t getRSSI();
+    virtual uint8_t getEncryptionType();
 };
 
 /* -------------------------------------------------------------------------- */
@@ -293,10 +287,10 @@ public:
 
     virtual int getMacAddress(uint8_t* mac) override;
 
-    virtual const char* getSSID() override;
-    virtual uint8_t* getBSSID(uint8_t* bssid) override;
-    virtual int32_t getRSSI() override;
-    virtual uint8_t getEncryptionType() override;
+    virtual const char* getSSID();
+    virtual uint8_t* getBSSID(uint8_t* bssid);
+    virtual int32_t getRSSI();
+    virtual uint8_t getEncryptionType();
 };
 
 /* -------------------------------------------------------------------------- */
