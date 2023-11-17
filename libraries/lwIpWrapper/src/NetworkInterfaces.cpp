@@ -1,7 +1,5 @@
 #include "NetworkInterfaces.h"
 #include <functional>
-#include <Arduino_DebugUtils.h>
-
 
 err_t _netif_init(struct netif* ni);
 err_t _netif_output(struct netif* ni, struct pbuf* p);
@@ -186,7 +184,6 @@ void C33EthernetLWIPNetworkInterface::begin(ip_addr_t* ip, ip_addr_t* nm, ip_add
 
 
 err_t C33EthernetLWIPNetworkInterface::init(struct netif* ni) {
-    DEBUG_INFO("netif init");
     // Setting up netif
 #if LWIP_NETIF_HOSTNAME
     // TODO pass the hostname in the constructor os with a setter
@@ -196,7 +193,6 @@ err_t C33EthernetLWIPNetworkInterface::init(struct netif* ni) {
     ni->name[1]                        = '0' + C33EthernetLWIPNetworkInterface::eth_id++;
     ni->mtu                            = 1500; // FIXME get this from the network
     ni->flags                          |= NETIF_FLAG_BROADCAST | NETIF_FLAG_ETHARP;
-    // DEBUG_INFO("netif init: %c%c", ni->name[0], ni->name[1]);
 
     memcpy(ni->hwaddr, this->driver->getMacAddress(), 6); // FIXME handle this using a constant
     // ni->hwaddr                         = C33EthernetDriver.getMacAddress();
@@ -210,7 +206,6 @@ err_t C33EthernetLWIPNetworkInterface::init(struct netif* ni) {
 }
 
 err_t C33EthernetLWIPNetworkInterface::output(struct netif* ni, struct pbuf* p) {
-    // DEBUG_INFO("send");
     err_t errval = ERR_OK;
     NETIF_STATS_INCREMENT_TX_TRANSMIT_CALLS(this->stats);
     NETIF_STATS_TX_TIME_START(this->stats);
@@ -220,7 +215,6 @@ err_t C33EthernetLWIPNetworkInterface::output(struct netif* ni, struct pbuf* p) 
     do {
         auto err = C33EthernetDriver.send((uint8_t*)q->payload, q->len);
         if(err != 0) {
-            DEBUG_INFO("send err");
 
             NETIF_STATS_INCREMENT_TX_TRANSMIT_FAILED_CALLS(this->stats);
             errval = ERR_IF;
