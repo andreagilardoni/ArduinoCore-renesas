@@ -53,7 +53,9 @@ public:
     /*
      * Sets the callback funtion that is then used to consume incoming data
      */
-    virtual void setConsumeCallback(std::function<void(uint8_t*, size_t)> consume_cbk) {this->consume_cbk = consume_cbk;}
+    virtual void setConsumeCallback(std::function<void(uint8_t*, uint32_t)> consume_cbk) {this->consume_cbk = consume_cbk;}
+    virtual void setLinkUpCallback(std::function<void()> link_up_cbk) {this->link_up_cbk = link_up_cbk;}
+    virtual void setLinkDownCallback(std::function<void()> link_down_cbk) {this->link_down_cbk = link_down_cbk;}
 
     /*
      * FIXME define interfaces for RX zero copy
@@ -66,9 +68,11 @@ public:
     virtual void up() = 0;
     virtual void down() = 0;
 
+    // TODO maybe we can manage mac address in the interface
+    virtual uint8_t* getMacAddress() = 0;
     // TODO define callback functions for generic functionalities a network driver has to cope with, like link_up event
 protected:
-    std::function<void(uint8_t*, size_t)> consume_cbk; // TODO move in callbacks
+    std::function<void(uint8_t*, uint32_t)> consume_cbk; // TODO move in callbacks
 
     std::function<void()> tx_frame_cbk;
     std::function<void()> link_up_cbk;
@@ -105,7 +109,7 @@ public:
 
 
     // TODO add callbacks getters/setters
-    inline uint8_t* getMacAddress() { return this->macaddress; }
+    virtual uint8_t* getMacAddress() override { return this->macaddress; }
 protected:
 
     // extend the callbacks and add the Driver specific callbacks
@@ -128,6 +132,9 @@ private:
 
     // tx circular buffer cursors
     uint8_t last = 0, first=0;
+
+    // uint8_t tx_buffer[1536];
+    volatile bool frame_in_transmission = false;
 
     // TODO macaddress setter
     uint8_t macaddress[8]; // FIXME differentiate between 6 and 8 len
@@ -157,3 +164,5 @@ private:
     virtual void irq_ether_callback(ether_callback_args_t* p_args);
     friend void _irq_ether_callback(ether_callback_args_t* p_args);
 };
+
+extern EthernetC33Driver C33EthernetDriver;

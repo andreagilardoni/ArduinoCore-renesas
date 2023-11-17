@@ -14,6 +14,8 @@
 // utility/proxy local functions
 void _irq_ether_callback(ether_callback_args_t* p_args);
 
+extern void dump_buffer(uint8_t* b, uint32_t len, uint8_t blocks=4, uint8_t cols=16);
+
 EthernetC33Driver::EthernetC33Driver(
     uint8_t rx_descriptors_len,
     uint8_t tx_descriptors_len,
@@ -40,6 +42,7 @@ buffer_allocator(buffer_allocator), buffer_size(buffer_size) {
         memalign(16, sizeof(ether_instance_descriptor_t)*rx_descriptors_len);
     this->tx_descriptors = (ether_instance_descriptor_t*)
         memalign(16, sizeof(ether_instance_descriptor_t)*tx_descriptors_len);
+        // memalign(16, sizeof(ether_instance_descriptor_t)*1);
 
     rx_buffers      = (uint8_t**) malloc(sizeof(void*)*rx_descriptors_len);
 
@@ -135,17 +138,15 @@ void EthernetC33Driver::begin() {
 }
 
 void EthernetC33Driver::poll() {
-    if(ETHER_RD0_RACT == (ctrl.p_rx_descriptor->status & ETHER_RD0_RACT)) {
-        return;
-    }
-    // The current rx_descriptor has data to be processed
+    // Polling the rx descriptor for available data
 
     uint32_t rx_frame_dim = 0;
     uint8_t* rx_frame_buf = nullptr;
     fsp_err_t err = FSP_SUCCESS;
     struct pbuf *p = nullptr;
 
-    do {
+    while(ETHER_RD0_RACT != (ctrl.p_rx_descriptor->status & ETHER_RD0_RACT)) {
+
         // NETIF_STATS_RX_TIME_START(_stats); // FIXME add stats
         // NETIF_STATS_INCREMENT_RX_INTERRUPT_CALLS(_stats);
         // Getting the available data in the Eth DMA buffer
@@ -187,21 +188,37 @@ void EthernetC33Driver::poll() {
         // NETIF_STATS_INCREMENT_ERROR(_stats, err);
         // NETIF_STATS_RX_TIME_AVERAGE(_stats);
         // NETIF_STATS_INCREMENT_RX_INTERRUPT_CALLS(_stats);
-    } while(ETHER_RD0_RACT != (ctrl.p_rx_descriptor->status & ETHER_RD0_RACT));
+    }
+
+    // Polling the tx descriptor for Tx transmission completed
+    // while(R_ETHER_TxStatusGet(this->ctrl, tx_buffers_info[first].buffer) {
+        // // FIXME check that first and the completed packet are valid
+        // // FIXME move this into the poll function
+        // tx_buffers_info[first].len = 0;
+
+        // if(tx_buffers_info[first].free_function) {
+        //     tx_buffers_info[first].free_function(tx_buffers_info[first].buffer);
+        //     tx_buffers_info[first].free_function = nullptr;
+        // } else {
+        //     free(tx_buffers_info[first].buffer);
+        // }
+        // tx_buffers_info[first].buffer = nullptr;
+        // first = (first + 1) % tx_descriptors_len;
+    // }
 }
 
 network_driver_send_err_t EthernetC33Driver::send(
     uint8_t* data, uint16_t len, network_driver_send_flags_t flags, void(*free_function)(void*)) {
-
+    // dump_buffer(tx_buffers_info[last].buffer, len);
+    // dump_buffer(data, len);
     // DEBUG_INFO("[send] %08X, %u", data, len);
-
+    __disable_irq();
     if(tx_buffers_info[last].len != 0) { // no available buffer
         DEBUG_INFO("[send] error");
 
         return NETWORK_DRIVER_SEND_ERR_BUFFER;
     }
 
-    uint8_t* tx_buf = nullptr;
     tx_buffers_info[last].len = len;
     tx_buffers_info[last].free_function = free_function;
 
@@ -215,17 +232,36 @@ network_driver_send_err_t EthernetC33Driver::send(
         tx_buffers_info[last].buffer = data; // FIXME verify this mode
     }
 
+    // dump_buffer(tx_buffers_info[last].buffer, len);
+    // dump_buffer(data, len);
+
     // put this buffer in the next circular buffer position and then increment the index
     // tx_buffers_info[last] = to_send;
-
+    // TODO handle the case where a packet is already being transmitted, should WRITE be called after the queued packet is correctly sent?
     fsp_err_t err = R_ETHER_Write(
         &this->ctrl, tx_buffers_info[last].buffer, tx_buffers_info[last].len);
     last = (last + 1) % tx_descriptors_len;
+    __enable_irq();
+
+    // single tx buffer implementation
+    // __disable_irq();
+    // if(frame_in_transmission) {
+    //     DEBUG_INFO("[send] error");
+    //     return NETWORK_DRIVER_SEND_ERR_BUFFER;
+    // }
+
+    // memcpy(tx_buffer, data, len);
+    // dump_buffer(tx_buffer, len);
+    // dump_buffer(data, len);
+
+    // fsp_err_t err = R_ETHER_Write(&this->ctrl, tx_buffer, len);
+    // frame_in_transmission = true;
+    // __enable_irq();
 
     if(err == FSP_SUCCESS) {
         return NETWORK_DRIVER_SEND_ERR_OK;
     } else {
-        // DEBUG_INFO("[send] R_ETHER_Write error %u", err);
+        DEBUG_INFO("[send] R_ETHER_Write error %u", err);
         return NETWORK_DRIVER_SEND_ERR_DRIVER;
     }
 }
@@ -315,7 +351,8 @@ void EthernetC33Driver::irq_ether_callback(ether_callback_args_t* p_args) {
             if (ETHER_FRAME_TRANSFER_COMPLETED  == (reg_eesr & ETHER_FRAME_TRANSFER_COMPLETED)) {
                 __disable_irq();
 
-                //FIXME check that first and the completed packet are valid
+                // FIXME check that first and the completed packet are valid
+                // FIXME move this into the poll function
                 tx_buffers_info[first].len = 0;
 
                 if(tx_buffers_info[first].free_function) {
@@ -326,6 +363,7 @@ void EthernetC33Driver::irq_ether_callback(ether_callback_args_t* p_args) {
                 }
                 tx_buffers_info[first].buffer = nullptr;
                 first = (first + 1) % tx_descriptors_len;
+                // frame_in_transmission = false;
                 __enable_irq();
 
                 if(this->tx_frame_cbk != nullptr) {
