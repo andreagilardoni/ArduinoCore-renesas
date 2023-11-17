@@ -39,14 +39,16 @@ static inline zerocopy_pbuf_t* get_zerocopy_pbuf(uint8_t *buffer) {
 LWIPNetworkInterface::LWIPNetworkInterface()
 :
 #ifdef LWIP_DHCP
-    dhcp_timeout(30000),
-    dhcp_started(false),
-    dhcp_acquired(false),
-    dhcp_st(DHCP_IDLE_STATUS),
-    _dhcp_lease_state(DHCP_CHECK_NONE)
+    dhcp_acquired(false)
 #endif
 {
     NETIF_STATS_INIT(this->stats);
+
+    if(driver != nullptr) {
+        // TODO check that this calls are effective
+        driver->setLinkDownCallback(std::bind(&LWIPNetworkInterface::linkDownCallback, this));
+        driver->setLinkUpCallback(std::bind(&LWIPNetworkInterface::linkUpCallback, this));
+    }
 }
 
 LWIPNetworkInterface::~LWIPNetworkInterface() {
@@ -55,7 +57,8 @@ LWIPNetworkInterface::~LWIPNetworkInterface() {
 
 
 void LWIPNetworkInterface::begin(ip_addr_t* ip, ip_addr_t* nm, ip_addr_t* gw) {
-    netif_add(
+    // netif add copies the ip addresses into the netif, no need to store them also in the object
+    struct netif *_ni = netif_add(
         &this->ni,
         // &this->ip, &this->nm, &this->gw, // FIXME understand how to properly set the ip
         ip, nm, gw,
@@ -63,26 +66,24 @@ void LWIPNetworkInterface::begin(ip_addr_t* ip, ip_addr_t* nm, ip_addr_t* gw) {
         _netif_init,
         ethernet_input
     );
+    if(_ni == nullptr) {
+        // FIXME error in netif_add, return error
+        return;
+    }
+
     netif_set_default(&this->ni); // TODO let the user decide which is the default one
 
     //TODO add link up and down callback and set the link
     netif_set_up(&this->ni);
     netif_set_link_up(&this->ni);
+
 #ifdef LWIP_DHCP
     // dhcp is started when begin gets ip == nullptr
     if(ip != nullptr) {
+        this->dhcpNotUsed();
         return;
     }
-
-    // block this call until dhcp server gives an ip address
-    // do {
-    //     // TODO manage the case that LWIP is run inside a timer.
-    //     this->task();
-    // } while(!dhcp_acquired);
-    // dhcp_request();
-    // DEBUG_INFO("dhcp start");
-
-    // this->DhcpStart();
+    this->dhcpStart();
 #endif
 }
 
@@ -105,6 +106,11 @@ void LWIPNetworkInterface::task() {
         // dhcp_task();
         // dhcp_last_time_call = millis();
     // }
+    // TODO we can add a lazy evaluated timer for this condition if dhcp_supplied_address takes too long
+    if(!this->dhcp_acquired && dhcp_supplied_address(&this->ni)) {
+        dhcp_acquired = true;
+    }
+
 #endif
     driver->poll();
 
@@ -114,180 +120,48 @@ void LWIPNetworkInterface::task() {
 
 #ifdef LWIP_DHCP
 
-void LWIPNetworkInterface::DhcpNotUsed() {
-    DhcpStop();
+void LWIPNetworkInterface::dhcpNotUsed() {
     dhcp_inform(&this->ni);
-}
-
-int LWIPNetworkInterface::checkLease() {
-    int rc = DHCP_CHECK_NONE;
-
-    task();
-    rc = dhcp_get_lease_state();
-
-    if (rc != _dhcp_lease_state) {
-        switch (_dhcp_lease_state) {
-        case DHCP_CHECK_NONE:
-            _dhcp_lease_state = rc;
-            rc = DHCP_CHECK_NONE;
-            break;
-
-        case DHCP_CHECK_RENEW_OK:
-            _dhcp_lease_state = rc;
-            if (rc == DHCP_CHECK_NONE) {
-                rc = DHCP_CHECK_RENEW_OK;
-            } else {
-                rc = DHCP_CHECK_RENEW_FAIL;
-            }
-            break;
-
-        case DHCP_CHECK_REBIND_OK:
-            _dhcp_lease_state = rc;
-            if (rc == DHCP_CHECK_NONE) {
-                rc = DHCP_CHECK_REBIND_OK;
-            } else {
-                rc = DHCP_CHECK_REBIND_FAIL;
-            }
-            break;
-
-        default:
-            _dhcp_lease_state = DHCP_CHECK_NONE;
-            break;
-        }
-    }
-
-    return rc;
-}
-
-uint8_t LWIPNetworkInterface::dhcp_get_lease_state() {
-    uint8_t res = 0;
-    struct dhcp* dhcp = (struct dhcp*)netif_get_client_data(&this->ni, LWIP_NETIF_CLIENT_DATA_INDEX_DHCP);
-
-    if (dhcp->state == 5 /*DHCP_STATE_RENEWING*/) {
-        res = 2;
-    } else if (dhcp->state == 4 /* DHCP_STATE_REBINDING */) {
-        res = 4;
-    }
-    return res;
-}
-
-bool LWIPNetworkInterface::dhcp_request() {
-    /* make a DHCP request: it runs till an address is acquired or a timeout
-       expires */
-    unsigned long startTime = millis();
-    bool acquired = false;
-
-    do {
-        this->task();
-        acquired = isDhcpAcquired();
-    } while (!acquired && ((millis() - startTime) < dhcp_timeout));
-
-    return acquired;
-}
-
-void LWIPNetworkInterface::dhcp_reset() {
-    /* it resets the DHCP status to IDLE */
-    // TODO understand how this is supposed to reset timers for dhcp
-    while (dhcp_st != DHCP_IDLE_STATUS) {
-        task(); // FIXME understand if this is ok
-    }
-}
-
-void LWIPNetworkInterface::DhcpSetTimeout(unsigned long t) {
-    dhcp_timeout = t;
 }
 
 bool LWIPNetworkInterface::isDhcpAcquired() {
     return dhcp_acquired;
 }
 
-bool LWIPNetworkInterface::DhcpStart() {
-    /* first stop / reset */
-    DhcpStop();
-    /* then actually start */
-    dhcp_started = true;
-    dhcp_st = DHCP_START_STATUS;
-    return dhcp_request();
+bool LWIPNetworkInterface::dhcpStart() {
+    return dhcp_start(&this->ni) == ERR_OK;
 }
 
-void LWIPNetworkInterface::DhcpStop() {
-    dhcp_started = false;
-    if (dhcp_st == DHCP_IDLE_STATUS) {
-        return;
-    }
-    if (dhcp_st == DHCP_GOT_STATUS && netif_is_link_up(&this->ni)) {
-        dhcp_st = DHCP_RELEASE_STATUS;
-    } else {
-        dhcp_st = DHCP_STOP_STATUS;
-    }
-    this->dhcp_reset();
+void LWIPNetworkInterface::dhcpStop() {
+    this->dhcpRelease();
+    dhcp_stop(&this->ni);
+}
+bool LWIPNetworkInterface::dhcpRelease() {
+    return dhcp_release(&this->ni) == ERR_OK;
 }
 
-void LWIPNetworkInterface::dhcp_task() {
-
-    struct dhcp* lwip_dhcp;
-    static unsigned long DHCPStartTime;
-
-    switch (dhcp_st) {
-    case DHCP_IDLE_STATUS:
-        /* nothing to do... wait for DhcpStart() to start the process */
-        break;
-    case DHCP_START_STATUS:
-        if (netif_is_link_up(&this->ni)) {
-            DEBUG_INFO("dhcp_start");
-            ip_addr_set_zero_ip4(&(this->ni.ip_addr));
-            ip_addr_set_zero_ip4(&(this->ni.netmask));
-            ip_addr_set_zero_ip4(&(this->ni.gw));
-            /* start lwIP dhcp */
-            dhcp_start(&this->ni);
-
-            DHCPStartTime = millis();
-            dhcp_st = DHCP_WAIT_STATUS;
-        }
-        break;
-    case DHCP_WAIT_STATUS:
-        if (netif_is_link_up(&this->ni)) {
-            if (dhcp_supplied_address(&this->ni)) {
-                dhcp_acquired = true;
-                dhcp_st = DHCP_GOT_STATUS;
-            } else if (millis() - DHCPStartTime > 1000) {
-                // DEBUG_INFO("pino1");
-
-                /* TIMEOUT */
-                lwip_dhcp = (struct dhcp*)netif_get_client_data(&this->ni, LWIP_NETIF_CLIENT_DATA_INDEX_DHCP);
-                if (lwip_dhcp->tries > MAX_DHCP_TRIES) {
-                    // DEBUG_INFO("pino2");
-                    dhcp_st = DHCP_STOP_STATUS;
-                }
-            }
-        } else {
-            dhcp_st = DHCP_START_STATUS;
-        }
-        break;
-    case DHCP_GOT_STATUS:
-        // DEBUG_INFO("pino");
-        if (!netif_is_link_up(&this->ni)) {
-            dhcp_st = DHCP_STOP_STATUS;
-        }
-
-        break;
-    case DHCP_RELEASE_STATUS:
-        dhcp_release(&this->ni);
-        dhcp_acquired = false;
-        dhcp_st = DHCP_STOP_STATUS;
-        break;
-    case DHCP_STOP_STATUS:
-        dhcp_acquired = false;
-        dhcp_stop(&this->ni);
-        if (dhcp_started) {
-            dhcp_st = DHCP_START_STATUS;
-        } else {
-            dhcp_st = DHCP_IDLE_STATUS;
-        }
-        break;
-    }
+bool LWIPNetworkInterface::dhcpRenew() {
+    return dhcp_renew(&this->ni) == ERR_OK;
 }
+
 #endif
+
+void LWIPNetworkInterface::up() {
+    netif_set_up(&this->ni);
+}
+
+void LWIPNetworkInterface::down() {
+    netif_set_down(&this->ni);
+}
+
+
+void LWIPNetworkInterface::linkUpCallback() {
+    netif_set_link_up(&this->ni); // TODO check that this sets the interface up also
+}
+
+void LWIPNetworkInterface::linkDownCallback() {
+    netif_set_link_down(&this->ni); // TODO check that this sets the interface down also
+}
 
 // C33EthernetLWIPNetworkInterface
 uint8_t C33EthernetLWIPNetworkInterface::eth_id = 0;
@@ -301,9 +175,12 @@ C33EthernetLWIPNetworkInterface::~C33EthernetLWIPNetworkInterface() {
 }
 
 void C33EthernetLWIPNetworkInterface::begin(ip_addr_t* ip, ip_addr_t* nm, ip_addr_t* gw) {
+    // The driver needs a callback to consume the incoming buffer
     this->driver->setConsumeCallback(
         std::bind(&C33EthernetLWIPNetworkInterface::consume_callback,
             this, std::placeholders:: _1, std::placeholders::_2));
+
+    // Call the begin function on the Parent class to init the interface
     LWIPNetworkInterface::begin(ip, nm, gw);
 }
 
@@ -319,6 +196,7 @@ err_t C33EthernetLWIPNetworkInterface::init(struct netif* ni) {
     ni->name[1]                        = '0' + C33EthernetLWIPNetworkInterface::eth_id++;
     ni->mtu                            = 1500; // FIXME get this from the network
     ni->flags                          |= NETIF_FLAG_BROADCAST | NETIF_FLAG_ETHARP;
+    // DEBUG_INFO("netif init: %c%c", ni->name[0], ni->name[1]);
 
     memcpy(ni->hwaddr, this->driver->getMacAddress(), 6); // FIXME handle this using a constant
     // ni->hwaddr                         = C33EthernetDriver.getMacAddress();
@@ -327,19 +205,28 @@ err_t C33EthernetLWIPNetworkInterface::init(struct netif* ni) {
 
     ni->output                         = etharp_output;
     ni->linkoutput                     = _netif_output;
+
+    return ERR_OK;
 }
 
 err_t C33EthernetLWIPNetworkInterface::output(struct netif* ni, struct pbuf* p) {
+    // DEBUG_INFO("send");
     err_t errval = ERR_OK;
     NETIF_STATS_INCREMENT_TX_TRANSMIT_CALLS(this->stats);
     NETIF_STATS_TX_TIME_START(this->stats);
-    // TODO check if this works, I may get a pbuf chain
-    auto err = C33EthernetDriver.send((uint8_t*)p->payload, p->len);
 
-    if(err != 0) {
-        NETIF_STATS_INCREMENT_TX_TRANSMIT_FAILED_CALLS(this->stats);
-        errval = ERR_IF;
-    }
+    // TODO check if this works, I may get a pbuf chain
+    struct pbuf *q = p;
+    do {
+        auto err = C33EthernetDriver.send((uint8_t*)q->payload, q->len);
+        if(err != 0) {
+            DEBUG_INFO("send err");
+
+            NETIF_STATS_INCREMENT_TX_TRANSMIT_FAILED_CALLS(this->stats);
+            errval = ERR_IF;
+        }
+        q = q->next;
+    } while(q != nullptr && errval != ERR_OK);
 
     NETIF_STATS_INCREMENT_TX_BYTES(this->stats, p->len);
     NETIF_STATS_TX_TIME_AVERAGE(this->stats);
@@ -347,12 +234,15 @@ err_t C33EthernetLWIPNetworkInterface::output(struct netif* ni, struct pbuf* p) 
 }
 
 void C33EthernetLWIPNetworkInterface::consume_callback(uint8_t* buffer, uint32_t len) {
+    // TODO understand if this callback can be moved into the base class
+
     NETIF_STATS_INCREMENT_RX_INTERRUPT_CALLS(this->stats);
     zerocopy_pbuf_t *custom_pbuf = get_zerocopy_pbuf(buffer);
 
     // TODO trim the buffer in order to not waste memory
     // mem_trim(buffer, len); // FIXME Assertion "mem_trim: legal memory" failed at line 722
 
+    // TODO consider allocating a custom pool for RX or use PBUF_POOL
     struct pbuf *p = pbuf_alloced_custom(
         PBUF_RAW, len, PBUF_RAM, &custom_pbuf->p, buffer, len);
 

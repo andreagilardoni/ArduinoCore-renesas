@@ -1,5 +1,5 @@
 #pragma once
-
+#include "Arduino.h"
 #include "lwip/include/lwip/dhcp.h"
 #include "lwip/include/lwip/dns.h"
 #include "lwip/include/lwip/init.h"
@@ -11,7 +11,6 @@
 #include "lwip/include/lwip/udp.h"
 #include "lwip/include/netif/ethernet.h"
 #include <EthernetDriver.h>
-#include "Arduino.h"
 
 // #define CNETIF_STATS_ENABLED
 #include "CNetifStats.h"
@@ -23,6 +22,10 @@
 class NetworkInterface {
 public:
     virtual ~NetworkInterface() {};
+    virtual void begin(ip_addr_t *ip = nullptr, ip_addr_t *nm = nullptr, ip_addr_t *gw = nullptr) = 0; // FIXME set adequate default values
+    virtual void task() = 0;
+    virtual void up() = 0;
+    virtual void down() = 0;
 };
 
 /*
@@ -34,22 +37,6 @@ class NetworkStack {
 
 };
 
-#ifdef LWIP_DHCP
-#define MAX_DHCP_TRIES 4
-#define DHCP_CHECK_NONE (0)
-#define DHCP_CHECK_RENEW_FAIL (1)
-#define DHCP_CHECK_RENEW_OK (2)
-#define DHCP_CHECK_REBIND_FAIL (3)
-#define DHCP_CHECK_REBIND_OK (4)
-typedef enum {
-    DHCP_IDLE_STATUS,
-    DHCP_START_STATUS,
-    DHCP_WAIT_STATUS,
-    DHCP_GOT_STATUS,
-    DHCP_RELEASE_STATUS,
-    DHCP_STOP_STATUS
-} DhcpSt_t;
-#endif
 /*
  * This interface groups all the interfaces that are implemented through lwip network stack
  * this class provides utility functions to implement a generic lwip interface
@@ -71,22 +58,25 @@ public:
      */
     virtual void task();
 
+    virtual void up();
+    virtual void down();
+
 #ifdef LWIP_DHCP
-    bool DhcpIsStarted() { return dhcp_started; }
-    void DhcpSetTimeout(unsigned long t);
-    /* stops DHCP */
-    void DhcpStop();
-    /* tells DHCP is not used on that interface */
-    void DhcpNotUsed();
-    /* starts DHCP and tries to acquire addresses, return true if acquired, false otherwise */
-    bool DhcpStart();
-    /* tells if DHCP has acquired addresses or not */
+    // starts DHCP and tries to acquire addresses, return true if request was made successfully (ususally memory issues)
+    bool dhcpStart();
+    // stops DHCP
+    void dhcpStop();
+    // tells DHCP server that the interface uses a statically provided ip address
+    void dhcpNotUsed();
+    // force DHCP renewal, returns false on error (ususally memory issues)
+    bool dhcpRenew();
+    // force DHCP release, usually called before dhcp stop (ususally memory issues)
+    bool dhcpRelease();
+    // tells if DHCP has acquired addresses or not
     bool isDhcpAcquired();
-    int checkLease();
 #endif
 protected:
     struct netif ni;
-    ip_addr_t ip, nm, gw;
 
     /*
      * this function is used to initialize the netif structure of lwip
@@ -98,25 +88,20 @@ protected:
      */
     virtual err_t output(struct netif* ni, struct pbuf* p) = 0;
 
-    // FIXME Driver interface pointer
-    NetworkDriver *driver = nullptr;
-
     // the following functions are used to call init and output from lwip in the object context in the C code
     friend err_t _netif_init(struct netif* ni);
     friend err_t _netif_output(struct netif* ni, struct pbuf* p);
 
+    // Driver interface pointer
+    NetworkDriver *driver = nullptr;
+
+    // Callbacks for driver basic functions
+    void linkUpCallback();
+    void linkDownCallback();
+
 #ifdef LWIP_DHCP
     // DHCP related members
-    unsigned long dhcp_last_time_call = 0;
-    unsigned long dhcp_timeout;
-    DhcpSt_t dhcp_st;
-    bool dhcp_started;
     volatile bool dhcp_acquired;
-    uint8_t _dhcp_lease_state;
-    void dhcp_task();
-    void dhcp_reset();
-    bool dhcp_request();
-    uint8_t dhcp_get_lease_state();
 #endif
 
 #ifdef CNETIF_STATS_ENABLED
@@ -169,6 +154,12 @@ protected:
 };
 
 class SoftAPLWIPNetworkInterface: public LWIPNetworkInterface {
+public:
+    // TODO add all the specific methods for wifi modules
+    virtual const char* getSSID();
+    virtual uint8_t* getBSSID(uint8_t* bssid);
+    virtual int32_t getRSSI();
+    virtual uint8_t getEncryptionType();
 protected:
     // FIXME understand the cpp way of setting this pointer
     static const char prefix = 's';
@@ -179,7 +170,21 @@ protected:
 };
 
 class LWIPNetworkStack: public NetworkStack {
+public:
+    LWIPNetworkStack(LWIPNetworkStack const&) = delete;
+    void operator=(LWIPNetworkStack const&) = delete;
+
+    // run polling tasks from all the LWIP Network Interfaces
+    // this needs to be called in the loop() if we are not running it
+    // with a timer
+    void task();
 private:
     LWIPNetworkStack();
     virtual ~LWIPNetworkStack();
+
+    // TODO define a Timer for calling tasks
+
+    std::vector<LWIPNetworkInterface*> ifaces;
+
+    // lwip stores the netif in a linked list called: netif_list
 };
