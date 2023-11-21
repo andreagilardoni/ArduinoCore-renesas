@@ -1,8 +1,14 @@
 #include "tcpClient.h"
+#include <Arduino.h>
+#include "utils.h"
+#include <Arduino_DebugUtils.h>
 
 // Forward declarations
-static err_t _lwip_tcp_connected_callback(void* arg, struct tcp_pcb* tpcb, err_t err);
-static err_t _lwip_tcp_recv_callback(void* arg, struct tcp_pcb* tpcb, struct pbuf* p, err_t err);
+err_t _lwip_tcp_connected_callback(void* arg, struct tcp_pcb* tpcb, err_t err);
+err_t _lwip_tcp_recv_callback(void* arg, struct tcp_pcb* tpcb, struct pbuf* p, err_t err);
+static err_t _lwip_tcp_sent_callback(void* arg, struct tcp_pcb* tpcb, u16_t len);
+void _lwip_tcp_err_callback(void *arg, err_t err);
+
 // TODO look into tcp_bind_netif for Ethernet and WiFiClient classes
 // TODO generalize the functions for extracting and inserting data into pbufs, they may be reused in UDP
 // TODO look into application polling:
@@ -26,7 +32,7 @@ int LWIPTCPClient::connect(IPAddress ip, uint16_t port) {
         return err;
     }
 
-    // tcp_err(this->pcb, lwip_tcp_err_callback); // FIXME make this a user callback?
+    tcp_err(this->pcb, _lwip_tcp_err_callback); // FIXME make this a user callback?
     if(err != ERR_OK) {
         return err;
     }
@@ -35,45 +41,58 @@ int LWIPTCPClient::connect(IPAddress ip, uint16_t port) {
 
     tcp_arg(this->pcb, this);
 
+    this->_ip = fromArduinoIP(ip);
+
     // FIXME this doesn't include timeout of connection, does lwip have it by default?
     err = tcp_connect(
-        this->pcb, ip_addr, port, // FIXME cast IPAddress correctly
+        this->pcb, &this->_ip, port, // FIXME check if _ip gets copied
         _lwip_tcp_connected_callback // FIXME we need to define a static private function
     );
     return err;
 }
 
-static err_t _lwip_tcp_connected_callback(void* arg, struct tcp_pcb* tpcb, err_t err) {
+int LWIPTCPClient::connect(const char* host, uint16_t port) {
+    // FIXME implement this
+    //CLwipIf::getInstance().getHostByName(host, remote_addr)
+}
+
+err_t _lwip_tcp_connected_callback(void* arg, struct tcp_pcb* tpcb, err_t err) {
     if(arg == NULL) {
         // Setup was not performed correctly and the arg was not setup properly
-        _lwip_tcp_connection_close(tpcb, tcp_arg);
+        // _lwip_tcp_connection_close(tpcb, tcp_arg);
+        // this->stop();// FIXME this doesn't exist
+
         return ERR_ARG;
     }
 
-    LWIPTCPClient* client = dynamic_cast<LWIPTCPClient*>arg;
+    LWIPTCPClient* client = (LWIPTCPClient*)arg;
 
-    client->_connected_callback(tpcb, err);
+    client->connected_callback(tpcb, err);
 }
 
-err_t LWIPTCPClient::_connected_callback(struct tcp_pcb* tpcb, err_t err) {
+err_t LWIPTCPClient::connected_callback(struct tcp_pcb* tpcb, err_t err) {
     if(err != ERR_OK) {
-        lwip_tcp_connection_close(tpcb, tcp_arg);
+        // lwip_tcp_connection_close(tpcb, tcp_arg);
+        this->stop();
+
         return err;
     }
 
     if(tcp_arg == NULL) {
         // Setup was not performed correctly and the arg was not setup properly
-        lwip_tcp_connection_close(tpcb, tcp_arg);
+        // lwip_tcp_connection_close(tpcb, tcp_arg);
+        this->stop();
+
         return ERR_ARG;
     }
 
-    tcp_arg->state = TCP_CONNECTED;
+    this->state = TCP_CONNECTED;
 
     /* initialize LwIP tcp_recv callback function */
     tcp_recv(tpcb, _lwip_tcp_recv_callback);
 
     /* initialize LwIP tcp_sent callback function */
-    // tcp_sent(tpcb, _lwip_tcp_sent_callback); // FIXME implement this: do we actually need it?
+    tcp_sent(tpcb, _lwip_tcp_sent_callback); // FIXME do we actually need it?
 
     /* initialize LwIP tcp_err callback function */
     // tcp_err(tpcb, lwip_tcp_err_callback); // initialized before, because we may get error during connection
@@ -84,57 +103,92 @@ err_t LWIPTCPClient::_connected_callback(struct tcp_pcb* tpcb, err_t err) {
     return err;
 }
 
-static err_t _lwip_tcp_recv_callback(void* arg, struct tcp_pcb* tpcb, struct pbuf* p, err_t err) {
+static err_t _lwip_tcp_sent_callback(void* arg, struct tcp_pcb* tpcb, u16_t len) {
     if(arg == NULL) {
         // Setup was not performed correctly and the arg was not setup properly
-        _lwip_tcp_connection_close(tpcb, tcp_arg);
+        // _lwip_tcp_connection_close(tpcb, tcp_arg);
+        // this->stop(); // FIXME this doesn't exist
+
         return ERR_ARG;
     }
 
-    LWIPTCPClient* client = dynamic_cast<LWIPTCPClient*>arg;
-
-    client->_recv_callback(struct tcp_pcb* tpcb, p, err_t err);
+    LWIPTCPClient* client = (LWIPTCPClient*)arg;
 }
 
-err_t LWIPTCPClient::_recv_callback(struct tcp_pcb* tpcb, struct pbuf* p, err_t err) {
+// callback function that should be called when data has successfully been received (i.e., acknowledged)
+// by the remote host. The len argument passed to the callback function gives the amount bytes that
+// was acknowledged by the last acknowledgment.
+void _lwip_tcp_err_callback(void *arg, err_t err) {
+    if(arg == NULL) {
+        // Setup was not performed correctly and the arg was not setup properly
+        // _lwip_tcp_connection_close(tpcb, tcp_arg);
+        // this->stop(); // FIXME this doesn't exist
+
+        // return ERR_ARG;
+        return;
+    }
+
+    LWIPTCPClient* client = (LWIPTCPClient*)arg;
+
+    DEBUG_INFO("TCP error %u", err);
+}
+
+err_t _lwip_tcp_recv_callback(void* arg, struct tcp_pcb* tpcb, struct pbuf* p, err_t err) {
+    if(arg == NULL) {
+        // Setup was not performed correctly and the arg was not setup properly
+        // _lwip_tcp_connection_close(tpcb, tcp_arg);
+        // this->stop(); // FIXME this doesn't exist
+
+        return ERR_ARG;
+    }
+
+    LWIPTCPClient* client = (LWIPTCPClient*)arg;
+
+    client->recv_callback(tpcb, p, err);
+}
+
+err_t LWIPTCPClient::recv_callback(struct tcp_pcb* tpcb, struct pbuf* p, err_t err) {
     err_t ret_err = ERR_OK;
 
     // FIXME this checks should be done on every callback
     if(err != ERR_OK) {
-        _lwip_tcp_connection_close(tpcb, tcp_arg);
+        // _lwip_tcp_connection_close(tpcb, tcp_arg);
+        this->stop();
         return err;
     }
 
     if (p == NULL) {
         // Remote host has closed the connection -> close from our side
-        _lwip_tcp_connection_close(tpcb, tcp_arg);
+        // _lwip_tcp_connection_close(tpcb, tcp_arg);
+        this->stop();
+
         return ERR_OK;
     }
 
     if(this->state == TCP_CONNECTED) {
-        __disable_irq();
-        if (this->p == nullptr) {
+        // __disable_irq(); // TODO redesign critical section handling
+        if (this->pbuf_head == nullptr) {
             // no need to increment the references of the pbuf,
             // since it is already 1 and lwip shifts the control to this code
-            this->p = p;
+            this->pbuf_head = p;
         } else {
-            // no need to increment the references of p, since it is already 1 and the only reference is this->p->next
-            pbuf_cat(this->p, p);
+            // no need to increment the references of p, since it is already 1 and the only reference is this->pbuf_head->next
+            pbuf_cat(this->pbuf_head, p);
         }
-        __enable_irq();
+        // __enable_irq();
 
         ret_err = ERR_OK;
     }
 
-    // DEBUG_INFO("head %08x, tot_len %6u New pbuf: %08x next %08x len %6u tot_len %6u", this->p, this->p->tot_len, p, p->next, p->len, p->tot_len);
+    // DEBUG_INFO("head %08x, tot_len %6u New pbuf: %08x next %08x len %6u tot_len %6u", this->pbuf_head, this->pbuf_head->tot_len, p, p->next, p->len, p->tot_len);
 
     return ret_err;
 }
 
 // copy a buffer from the app level to the send buffer of lwip
 // TODO understand how to handle a zero copy mode
-size_t LWIPTCPClient::write(uint8_t* buffer, size_t size) {
-    uint8_t* buffer_cursor = buffer;
+size_t LWIPTCPClient::write(const uint8_t* buffer, size_t size) {
+    uint8_t* buffer_cursor = (uint8_t*)buffer;
     uint8_t bytes_to_send = 0;
 
     do {
@@ -164,22 +218,29 @@ size_t LWIPTCPClient::write(uint8_t* buffer, size_t size) {
     return buffer - buffer_cursor;
 }
 
-// this function checks the input parameters and return true if they are not valid
-inline bool lwip_tcp_read_checks(uint8_t* buffer, uint16_t buffer_size) {
-  // DEBUG_INFO("CHECK: size %6u, buf %08x, client %08x, pbuf %08x", buffer_size, buffer, client, client->p);
+size_t LWIPTCPClient::write(uint8_t c) {
+    // FIXME implement this
 
-  return (buffer_size==0 || buffer==nullptr || client->p==nullptr);
+    return 0;
+}
+
+void LWIPTCPClient::flush() {
+    // FIXME implement this
+}
+
+int LWIPTCPClient::available() {
+    return this->pbuf_head == nullptr ? 0 : this->pbuf_head->tot_len;
 }
 
 // copy data from lwip buffers to the application level
 // FIXME consider synchronization issues while calling this function, interrupts may cause issues
-uint16_t LWIPTCPClient::read(uint8_t* buffer, uint16_t buffer_size) {
+int LWIPTCPClient::read(uint8_t* buffer, size_t buffer_size) {
 
-    if(lwip_tcp_read_checks(buffer, buffer_size)) {
+    if(buffer_size==0 || buffer==nullptr || this->pbuf_head==nullptr) {
         return 0; // TODO extend checks
     }
     // copy data from the lwip buffer to the app provided buffer
-    // TODO look into pbuf_get_contiguous(this->p, buffer_cursor, len);
+    // TODO look into pbuf_get_contiguous(this->pbuf_head, buffer_cursor, len);
     // pbuf_get_contiguous: returns the pointer to the payload if buffer_size <= pbuf.len
     //      otherwise copies data in the user provided buffer. This can be used in a callback paradigm,
     //      in order to avoid memcpy data
@@ -189,19 +250,31 @@ uint16_t LWIPTCPClient::read(uint8_t* buffer, uint16_t buffer_size) {
      * meaning that across different calls of this function a pbuf could be partially copied
      * we need to account that
      */
-    uint16_t copied = pbuf_copy_partial(this->p, buffer, buffer_size, this->pbuf_offset);
+    uint16_t copied = pbuf_copy_partial(this->pbuf_head, buffer, buffer_size, this->pbuf_offset);
 
-    lwip_tcp_read_free_pbuf_chain(copied);
+    this->free_pbuf_chain(copied);
 
     return copied;
 }
 
-void LWIPTCPClient::_lwip_tcp_read_free_pbuf_chain(uint16_t copied) {
+int LWIPTCPClient::read() {
+    // FIXME implement this
+}
+
+int LWIPTCPClient::peek() {
+    // FIXME implement this
+}
+
+uint8_t LWIPTCPClient::status() {
+    return this->state;
+}
+
+void LWIPTCPClient::free_pbuf_chain(uint16_t copied) {
     /*
-    * free pbufs that have been copied, if copied == 0 we have an error
-    * free the buffer chain starting from the head up to the last entire pbuf ingested
-    * taking into account the previously not entirely consumed pbuf
-    */
+     * free pbufs that have been copied, if copied == 0 we have an error
+     * free the buffer chain starting from the head up to the last entire pbuf ingested
+     * taking into account the previously not entirely consumed pbuf
+     */
     uint32_t tobefreed = 0;
     // DEBUG_INFO("cleaning up");
     copied += this->pbuf_offset;
@@ -209,7 +282,7 @@ void LWIPTCPClient::_lwip_tcp_read_free_pbuf_chain(uint16_t copied) {
     // in order to clean up the chain we need to find the pbuf in the last pbuf in the chain
     // that got completely consumed by the application, dechain it from it successor and delete the chain before it
 
-    struct pbuf *head = this->p, *last=head, *prev=nullptr; // FIXME little optimization prev can be substituted by last->next
+    struct pbuf *head = this->pbuf_head, *last=head, *prev=nullptr; // FIXME little optimization prev can be substituted by last->next
 
     while(last!=nullptr && last->len + tobefreed <= copied) {
         tobefreed += last->len;
@@ -222,14 +295,14 @@ void LWIPTCPClient::_lwip_tcp_read_free_pbuf_chain(uint16_t copied) {
     // if we reached the end of the chain set the this pbuf pointer to nullptr
     if(prev != nullptr && last != nullptr) {
         prev->next = nullptr;
-        this->p = last;
+        this->pbuf_head = last;
     } if(last == nullptr) {
-        this->p = nullptr;
+        this->pbuf_head = nullptr;
     }
 
-    // the chain that is referenced by head is detached by the one referenced by this->p
+    // the chain that is referenced by head is detached by the one referenced by this->pbuf_head
     // free the chain if we haven't copied entirely the first pbuf (prev == nullptr)
-    if(this->p != head) {
+    if(this->pbuf_head != head) {
         uint8_t refs = pbuf_free(head);
 
         // DEBUG_INFO("Freed: %2u", refs);
@@ -251,79 +324,70 @@ void LWIPTCPClient::stop() {
     if(this->pcb != nullptr) {
         err_t err = tcp_close(this->pcb);
         this->state = TCP_CLOSING;
+
+        this->pcb = nullptr;
+
+        // FIXME if err != ERR_OK retry, there may be memory issues, retry?
     }
-    // FIXME if err != ERR_OK retry, there may be memory issues, retry?
+
+    // reset all the other variables in this class
 
     // if(tcp->p != nullptr) {
     //     pbuf_free(tcp->p); // FIXME it happens that a pbuf, with ref == 0 is added for some reason
     // }
 }
 
+uint8_t LWIPTCPClient::connected() {
+    return this->state != TCP_NONE; //TODO
+}
 
-/*
- * ################################################################################################
- * Functions that are not being reimplemented yet
- * ################################################################################################
- */
-
+LWIPTCPClient::operator bool() {
+    // TODO understand semantics of this operator
+}
 
 // This function is useful for protocol that provide sequence delimiter, like http,
 // this allows the user to avoid using temporary buffers
-// uint16_t lwip_tcp_read_buffer_until_token(
-//     struct TCPClient* client, uint8_t* buffer, uint16_t buffer_size, char* token, bool &found) {
+size_t LWIPTCPClient::read_until_token(
+    const uint8_t* buffer, uint16_t buffer_size, char* token, bool &found) {
 
-//     if(lwip_tcp_read_checks(client, buffer, buffer_size)) {
-//         return 0; // TODO extend checks and make them a general inline function
-//     }
+    if(buffer_size==0 || buffer==nullptr || this->pbuf_head==nullptr) {
+        return 0; // TODO extend checks
+    }
+    // TODO check that the buffer size is less than the token len
 
-//     // TODO check that the buffer size is less than the token len
+    uint16_t offset=this->pbuf_offset;
+    /* iterate over pbufs until:
+    * - the first occurrence of token
+    * - the provided buffer is full
+    * - the available pbufs have been consumed
+    */
+    size_t tkn_len = strlen(token);
 
-//     uint16_t offset=client->pbuf_offset;
-//     /* iterate over pbufs until:
-//     * - the first occurrence of token
-//     * - the provided buffer is full
-//     * - the available pbufs have been consumed
-//     */
-//     size_t tkn_len = strlen(token);
+    // FIXME if we have already found the token we hare wasting time to check the entire buffer again
+    uint16_t position = pbuf_memfind(this->pbuf_head, token, tkn_len, this->pbuf_offset); // TODO check efficiency of this function
+    uint16_t buf_copy_len = buffer_size;
 
-//     // FIXME if we have already found the token we hare wasting time to check the entire buffer again
-//     uint16_t position = pbuf_memfind(client->p, token, tkn_len, client->pbuf_offset); // TODO check efficiency of this function
-//     uint16_t buf_copy_len = buffer_size;
+    // TODO triple check the indices of these conditions
+    if(position != 0xffff && position + tkn_len <= buffer_size) { // TODO consider how to handle the case that the chain is long 0xffff
+        // We found the token and it fits the user provided buffer
+        buf_copy_len = position + tkn_len;
+        found = true;
+    } else if(position != 0xffff && position < buffer_size && position + tkn_len > buffer_size) {
+        // if the token is found and fits partially with the user provided buffer
+        buf_copy_len = position - 1; // copy without consuming the token
+        found = false;
+    } else {
+        /*
+         * we cover 2 cases here:
+         * - we didn't find the token
+         * - we found the token, but it doesn't fit the user provided buffer
+         */
+        found = false;
+    }
 
-//     // TODO triple check the indices of these conditions
-//     if(position != 0xffff && position + tkn_len <= buffer_size) { // TODO consider how to handle the case that the chain is long 0xffff
-//         // We found the token and it fits the user provided buffer
-//         buf_copy_len = position + tkn_len;
-//         found = true;
-//     } else if(position != 0xffff && position < buffer_size && position + tkn_len > buffer_size) {
-//         // if the token is found and fits partially with the user provided buffer
-//         buf_copy_len = position - 1; // copy without consuming the token
-//         found = false;
-//     } else {
-//         /*
-//          * we cover 2 cases here:
-//          * - we didn't find the token
-//          * - we found the token, but it doesn't fit the user provided buffer
-//          */
-//         found = false;
-//     }
+    uint16_t copied = pbuf_copy_partial(this->pbuf_head, (uint8_t*)buffer, buf_copy_len, this->pbuf_offset);
 
-//     uint16_t copied = pbuf_copy_partial(client->p, buffer, buf_copy_len, client->pbuf_offset);
+    this->free_pbuf_chain(copied);
 
-//     lwip_tcp_read_free_pbuf_chain(client, copied);
-
-//     return copied;
-// }
-
-// callback function that should be called when data has successfully been received (i.e., acknowledged)
-// by the remote host. The len argument passed to the callback function gives the amount bytes that
-// was acknowledged by the last acknowledgment.
-// void lwip_tcp_err_callback(void *arg, err_t err) {
-//   TCPClient* tcp_arg = (TCPClient*)arg;
-
-//   DEBUG_ERROR("TCP Error collected: %d", err);
-// }
-
-// err_t lwip_tcp_sent_callback(void* arg, struct tcp_pcb* tpcb, u16_t len) {
-//   TCPClient* tcp_arg = (TCPClient*)arg;
-// }
+    return copied;
+}

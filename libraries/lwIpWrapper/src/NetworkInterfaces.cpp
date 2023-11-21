@@ -1,5 +1,6 @@
 #include "NetworkInterfaces.h"
 #include <functional>
+#include "utils.h"
 
 err_t _netif_init(struct netif* ni);
 err_t _netif_output(struct netif* ni, struct pbuf* p);
@@ -47,6 +48,8 @@ LWIPNetworkInterface::LWIPNetworkInterface()
         driver->setLinkDownCallback(std::bind(&LWIPNetworkInterface::linkDownCallback, this));
         driver->setLinkUpCallback(std::bind(&LWIPNetworkInterface::linkUpCallback, this));
     }
+
+    // TODO add the interface to the network stack
 }
 
 LWIPNetworkInterface::~LWIPNetworkInterface() {
@@ -54,12 +57,15 @@ LWIPNetworkInterface::~LWIPNetworkInterface() {
 }
 
 
-void LWIPNetworkInterface::begin(ip_addr_t* ip, ip_addr_t* nm, ip_addr_t* gw) {
+void LWIPNetworkInterface::begin(const IPAddress &ip, const IPAddress &nm, const IPAddress &gw) {
+    ip_addr_t _ip = fromArduinoIP(ip);
+    ip_addr_t _nm = fromArduinoIP(nm);
+    ip_addr_t _gw = fromArduinoIP(gw);
+
     // netif add copies the ip addresses into the netif, no need to store them also in the object
     struct netif *_ni = netif_add(
         &this->ni,
-        // &this->ip, &this->nm, &this->gw, // FIXME understand how to properly set the ip
-        ip, nm, gw,
+        &_ip, &_nm, &_gw, // FIXME understand if ip addresses are being copied
         this,
         _netif_init,
         ethernet_input
@@ -77,11 +83,11 @@ void LWIPNetworkInterface::begin(ip_addr_t* ip, ip_addr_t* nm, ip_addr_t* gw) {
 
 #ifdef LWIP_DHCP
     // dhcp is started when begin gets ip == nullptr
-    if(ip != nullptr) {
+    if(ip != INADDR_NONE) {
         this->dhcpNotUsed();
-        return;
+    } else {
+        this->dhcpStart();
     }
-    this->dhcpStart();
 #endif
 }
 
@@ -172,7 +178,7 @@ C33EthernetLWIPNetworkInterface::~C33EthernetLWIPNetworkInterface() {
 
 }
 
-void C33EthernetLWIPNetworkInterface::begin(ip_addr_t* ip, ip_addr_t* nm, ip_addr_t* gw) {
+void C33EthernetLWIPNetworkInterface::begin(const IPAddress &ip, const IPAddress &nm, const IPAddress &gw) {
     // The driver needs a callback to consume the incoming buffer
     this->driver->setConsumeCallback(
         std::bind(&C33EthernetLWIPNetworkInterface::consume_callback,

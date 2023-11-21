@@ -1,5 +1,5 @@
 #pragma once
-#include "Arduino.h"
+#include <Arduino.h>
 #include "lwip/include/lwip/dhcp.h"
 #include "lwip/include/lwip/dns.h"
 #include "lwip/include/lwip/init.h"
@@ -22,7 +22,7 @@
 class NetworkInterface {
 public:
     virtual ~NetworkInterface() {};
-    virtual void begin(ip_addr_t *ip = nullptr, ip_addr_t *nm = nullptr, ip_addr_t *gw = nullptr) = 0; // FIXME set adequate default values
+    virtual void begin(const IPAddress &ip = INADDR_NONE, const IPAddress &nm = INADDR_NONE, const IPAddress &gw = INADDR_NONE) = 0;
     virtual void task() = 0;
     virtual void up() = 0;
     virtual void down() = 0;
@@ -34,7 +34,7 @@ public:
  * regardless of the interface we are interested on sending the packets to
  */
 class NetworkStack {
-
+    int getHostByName(const char* aHostname, IPAddress& aResult);
 };
 
 /*
@@ -44,14 +44,14 @@ class NetworkStack {
 class LWIPNetworkInterface: public NetworkInterface {
 public:
     LWIPNetworkInterface();
-    virtual ~LWIPNetworkInterface();
+    ~LWIPNetworkInterface();
 
     /*
      * The begin function is called by the user in the sketch to initialize the network interface
      * that he is planning on using in the sketch.
      */
      // FIXME we need to use arduino defined ip address structures
-    virtual void begin(ip_addr_t *ip = nullptr, ip_addr_t *nm = nullptr, ip_addr_t *gw = nullptr); // FIXME set adequate default values
+    virtual void begin(const IPAddress &ip = INADDR_NONE, const IPAddress &nm = INADDR_NONE, const IPAddress &gw = INADDR_NONE);
 
     /*
      * This method performs interface specific tasks (if any)
@@ -119,9 +119,9 @@ public:
 class C33EthernetLWIPNetworkInterface: public LWIPNetworkInterface {
 public:
     C33EthernetLWIPNetworkInterface();
-    virtual ~C33EthernetLWIPNetworkInterface();
+    ~C33EthernetLWIPNetworkInterface();
 
-    virtual void begin(ip_addr_t *ip = nullptr, ip_addr_t *nm = nullptr, ip_addr_t *gw = nullptr) override;
+    virtual void begin(const IPAddress &ip = INADDR_NONE, const IPAddress &nm = INADDR_NONE, const IPAddress &gw = INADDR_NONE) override;
     // virtual void task();
 protected:
     static const char eth_ifname_prefix = 'e';
@@ -178,6 +178,10 @@ public:
     // this needs to be called in the loop() if we are not running it
     // with a timer
     void task();
+
+    // Function that provides a Client of the correct kind given the protocol provided in url
+    // Client* connect(std::string url);
+    // void request(std::string url, std::function<void(uint8_t*, size_t)>);
 private:
     LWIPNetworkStack();
     virtual ~LWIPNetworkStack();

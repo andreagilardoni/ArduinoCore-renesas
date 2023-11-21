@@ -1,14 +1,13 @@
 #pragma once
-
-// forward declaration
-class LWIPTCPClient;
-using TCPClient = LWIPTCPClient;
+#include <Client.h>
+#include <lwip/include/lwip/tcp.h>
 
 // TODO define error codes in an enum
 
-class LWIPTCPClient: Client { // : interfaces::TCPClient // TODO we probably need to import Client class definition
+class LWIPTCPClient: public arduino::Client { // : interfaces::TCPClient // TODO we probably need to import Client class definition
 public:
     LWIPTCPClient();
+    virtual ~LWIPTCPClient();
     // LWIPTCPClient(struct tcp_struct* tcpClient); // FIXME this should be a private constructor, friend of Server
 
     // disable copy constructor
@@ -19,9 +18,7 @@ public:
     LWIPTCPClient(LWIPTCPClient&&);
     void operator=(LWIPTCPClient&&);
 
-    virtual ~LWIPTCPClient();
-
-    uint8_t status();
+    virtual uint8_t status();
     virtual int connect(IPAddress ip, uint16_t port);
     virtual int connect(const char* host, uint16_t port);
     virtual size_t write(uint8_t); // TODO implement this
@@ -29,6 +26,8 @@ public:
     virtual int available();
     virtual int read();
     virtual int read(uint8_t* buf, size_t size);
+    size_t read_until_token(
+        const uint8_t* buffer, uint16_t buffer_size, char* token, bool &found);
 
     // TODO define a read_callback approach, where we avoid copying data
 
@@ -75,7 +74,7 @@ private:
     };
 
     // struct _lwip_tcp_client {
-    tcp_state_t state=      TCP_NONE;
+    _tcp_state_t state=      TCP_NONE;
     struct pbuf* pbuf_head= nullptr;
     tcp_pcb* pcb=           nullptr;
     uint16_t pbuf_offset=   0;
@@ -83,8 +82,13 @@ private:
 
     // struct _lwip_tcp_client* _tcp_client;
     uint16_t _timeout = 10000;
+    ip_addr_t _ip;
 
 
-    err_t _connected_callback(struct tcp_pcb* tpcb, err_t err);
-    void _lwip_tcp_read_free_pbuf_chain(uint16_t copied)
+    err_t connected_callback(struct tcp_pcb* tpcb, err_t err);
+    void free_pbuf_chain(uint16_t copied);
+    err_t recv_callback(struct tcp_pcb* tpcb, struct pbuf* p, err_t err);
+
+    friend err_t _lwip_tcp_recv_callback(void* arg, struct tcp_pcb* tpcb, struct pbuf* p, err_t err);
+    friend err_t _lwip_tcp_connected_callback(void* arg, struct tcp_pcb* tpcb, err_t err);
 };
