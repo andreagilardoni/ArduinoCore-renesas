@@ -1,6 +1,7 @@
 #include "NetworkInterfaces.h"
 #include <functional>
 #include "utils.h"
+#include <Arduino_DebugUtils.h>
 
 err_t _netif_init(struct netif* ni);
 err_t _netif_output(struct netif* ni, struct pbuf* p);
@@ -34,7 +35,6 @@ static inline zerocopy_pbuf_t* get_zerocopy_pbuf(uint8_t *buffer) {
 }
 
 // LWIPNetworkInterface
-
 LWIPNetworkInterface::LWIPNetworkInterface()
 :
 #ifdef LWIP_DHCP
@@ -48,14 +48,7 @@ LWIPNetworkInterface::LWIPNetworkInterface()
         driver->setLinkDownCallback(std::bind(&LWIPNetworkInterface::linkDownCallback, this));
         driver->setLinkUpCallback(std::bind(&LWIPNetworkInterface::linkUpCallback, this));
     }
-
-    // TODO add the interface to the network stack
 }
-
-LWIPNetworkInterface::~LWIPNetworkInterface() {
-
-}
-
 
 void LWIPNetworkInterface::begin(const IPAddress &ip, const IPAddress &nm, const IPAddress &gw) {
     ip_addr_t _ip = fromArduinoIP(ip);
@@ -65,7 +58,7 @@ void LWIPNetworkInterface::begin(const IPAddress &ip, const IPAddress &nm, const
     // netif add copies the ip addresses into the netif, no need to store them also in the object
     struct netif *_ni = netif_add(
         &this->ni,
-        &_ip, &_nm, &_gw, // FIXME understand if ip addresses are being copied
+        &_ip, &_nm, &_gw, // ip addresses are being copied and not taken as reference, use a local defined variable
         this,
         _netif_init,
         ethernet_input
@@ -74,8 +67,6 @@ void LWIPNetworkInterface::begin(const IPAddress &ip, const IPAddress &nm, const
         // FIXME error in netif_add, return error
         return;
     }
-
-    netif_set_default(&this->ni); // TODO let the user decide which is the default one
 
     //TODO add link up and down callback and set the link
     netif_set_up(&this->ni);
@@ -89,6 +80,9 @@ void LWIPNetworkInterface::begin(const IPAddress &ip, const IPAddress &nm, const
         this->dhcpStart();
     }
 #endif
+
+    // add the interface to the network stack
+    LWIPNetworkStack::getInstance().add_iface(this); // TODO remove interface when it is needed (??)
 }
 
 err_t _netif_init(struct netif* ni) {
@@ -117,9 +111,6 @@ void LWIPNetworkInterface::task() {
 
 #endif
     driver->poll();
-
-    // FIXME this function should not be called here
-    // sys_check_timeouts();
 }
 
 #ifdef LWIP_DHCP
@@ -174,10 +165,6 @@ C33EthernetLWIPNetworkInterface::C33EthernetLWIPNetworkInterface() {
     LWIPNetworkInterface::driver = &C33EthernetDriver; // driver is the pointer to C33 ethernet driver implementation
 }
 
-C33EthernetLWIPNetworkInterface::~C33EthernetLWIPNetworkInterface() {
-
-}
-
 void C33EthernetLWIPNetworkInterface::begin(const IPAddress &ip, const IPAddress &nm, const IPAddress &gw) {
     // The driver needs a callback to consume the incoming buffer
     this->driver->setConsumeCallback(
@@ -216,7 +203,12 @@ err_t C33EthernetLWIPNetworkInterface::output(struct netif* ni, struct pbuf* p) 
     NETIF_STATS_INCREMENT_TX_TRANSMIT_CALLS(this->stats);
     NETIF_STATS_TX_TIME_START(this->stats);
 
-    // TODO check if this works, I may get a pbuf chain
+    /* TODO check if this makes sense, I may get a pbuf chain
+     * it could happen that if I get a pbuf chain
+     * - there are enough tx_buffers available to accomodate all the packets in the chain
+     * - most of the chain is enqueued for delivery, but a certain point the driver.send call returns error
+     *   then lwip is supposed to handle that, that may be an issue
+     */
     struct pbuf *q = p;
     do {
         auto err = C33EthernetDriver.send((uint8_t*)q->payload, q->len);
@@ -224,6 +216,7 @@ err_t C33EthernetLWIPNetworkInterface::output(struct netif* ni, struct pbuf* p) 
 
             NETIF_STATS_INCREMENT_TX_TRANSMIT_FAILED_CALLS(this->stats);
             errval = ERR_IF;
+            break;
         }
         q = q->next;
     } while(q != nullptr && errval != ERR_OK);
@@ -240,6 +233,7 @@ void C33EthernetLWIPNetworkInterface::consume_callback(uint8_t* buffer, uint32_t
     zerocopy_pbuf_t *custom_pbuf = get_zerocopy_pbuf(buffer);
 
     // TODO trim the buffer in order to not waste memory
+    // mem_trim should be passed as an argument, since it depends on the kind of allocation performed
     // mem_trim(buffer, len); // FIXME Assertion "mem_trim: legal memory" failed at line 722
 
     // TODO consider allocating a custom pool for RX or use PBUF_POOL
@@ -254,3 +248,131 @@ void C33EthernetLWIPNetworkInterface::consume_callback(uint8_t* buffer, uint32_t
         NETIF_STATS_INCREMENT_RX_BYTES(this->stats, p->len);
     }
 }
+
+
+// LWIPNetworkStack
+LWIPNetworkStack::LWIPNetworkStack() { }
+
+void LWIPNetworkStack::add_iface(LWIPNetworkInterface* iface) {
+    // if it is the first interface set it as the default route
+    if(this->ifaces.empty()) {
+        netif_set_default(&iface->ni); // TODO let the user decide which is the default one
+    }
+
+    // add the interface if not already present in the vector
+    this->ifaces.push_back(iface);
+}
+
+void LWIPNetworkStack::task() {
+    for(LWIPNetworkInterface* iface: this->ifaces) { // FIXME is this affecting performances?
+        iface->task();
+    }
+
+    sys_check_timeouts();
+}
+
+void LWIPNetworkStack::setDefaultIface(LWIPNetworkInterface* iface) {
+    // TODO check if the iface is in the vector
+
+    netif_set_default(&iface->ni);
+}
+
+#if defined(LWIP_DNS) && LWIP_DNS
+
+struct dns_callback {
+    std::function<void(const IPAddress&)> cbk;
+};
+
+static void _getHostByNameCBK(const char *name, const ip_addr_t *ipaddr, void *callback_arg) {
+    dns_callback* cbk = (dns_callback*)callback_arg;
+
+    cbk->cbk(toArduinoIP(ipaddr));
+
+    delete cbk;
+}
+
+// add a dns server, priority set to 0 means it is the first being queryed, -1 means the last
+uint8_t LWIPNetworkStack::addDnsServer(const IPAddress& aDNSServer, int8_t priority) {
+    // TODO test this function with all the possible cases of dns server position
+    if(priority == -1) {
+        // lwip has an array for dns servers that can be iterated with dns_getserver(num)
+        // when a dns server is set to any value, it means it is the last
+
+        for(priority=0;
+            priority<DNS_MAX_SERVERS && !ip_addr_isany_val(*dns_getserver(priority));
+            priority++) {}
+    }
+
+    if(priority >= DNS_MAX_SERVERS) {
+        // unable to add another dns server, because priority is more than the dns server available space
+        return -1;
+    }
+
+    ip_addr_t ip = fromArduinoIP(aDNSServer);
+
+    dns_setserver(priority, &ip);
+}
+
+void LWIPNetworkStack::clearDnsServers() {
+    for(uint8_t i=0; i<DNS_MAX_SERVERS; i++) {
+        dns_setserver(i, IP_ANY_TYPE);
+    }
+}
+
+// DNS resolution works with a callback if the resolution doesn't return immediately
+int LWIPNetworkStack::getHostByName(const char* aHostname, IPAddress& aResult, bool execute_task) {
+    /* this has to be a blocking call but we need to understand how to handle wait time
+     * - we can have issues when running concurrently from different contextes,
+     *   meaning that issues may arise if we run task() method of this class from an interrupt
+     *   context and the "userspace".
+     * - this function is expected to be called in the application layer, while the lwip stack is
+     *   being run in an interrupt context, otherwise this call won't work because it will block
+     *   everything
+     * - this function shouldn't be called when lwip is run in the same context as the application
+     */
+    volatile bool completed = false;
+
+    uint8_t res = this->getHostByName(aHostname, [&aResult, &completed](const IPAddress& ip){
+        aResult = ip;
+        completed = true;
+    });
+
+    while(res == 1 && !completed) { // DNS timeouts seems to be handled by lwip, no need to put one here
+        delay(1);
+        if(execute_task) {
+            this->task();
+        }
+    }
+
+    return res == 1 ? 0 : res;
+}
+
+// TODO instead of returning int return an enum value
+int LWIPNetworkStack::getHostByName(const char* aHostname, std::function<void(const IPAddress&)> cbk) {
+    ip_addr_t addr; // TODO understand if this needs to be in the heap
+    uint8_t res = 0;
+
+    dns_callback* dns_cbk = new dns_callback;
+    dns_cbk->cbk = cbk;
+    err_t err = dns_gethostbyname(aHostname, &addr, _getHostByNameCBK, dns_cbk);
+
+    switch(err) {
+    case ERR_OK:
+        // the address was already present in the local cache
+        cbk(toArduinoIP(&addr));
+
+        delete dns_cbk;
+        break;
+    case ERR_INPROGRESS:
+        // the address is not present in the local cache, return and wait for the address resolution to complete
+        res = 1;
+        break;
+    case ERR_ARG: // there are issues in the arguments passed
+    default:
+        delete dns_cbk;
+        res = -1;
+    }
+
+    return res;
+}
+#endif

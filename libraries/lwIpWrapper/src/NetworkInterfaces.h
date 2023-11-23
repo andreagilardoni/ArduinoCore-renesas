@@ -15,6 +15,9 @@
 // #define CNETIF_STATS_ENABLED
 #include "CNetifStats.h"
 
+//forward declarations
+class LWIPNetworkStack;
+
 /*
  * The following class represent a generic network interface independently of the
  * Network engine that is working on top of.
@@ -44,13 +47,11 @@ class NetworkStack {
 class LWIPNetworkInterface: public NetworkInterface {
 public:
     LWIPNetworkInterface();
-    ~LWIPNetworkInterface();
 
     /*
      * The begin function is called by the user in the sketch to initialize the network interface
      * that he is planning on using in the sketch.
      */
-     // FIXME we need to use arduino defined ip address structures
     virtual void begin(const IPAddress &ip = INADDR_NONE, const IPAddress &nm = INADDR_NONE, const IPAddress &gw = INADDR_NONE);
 
     /*
@@ -76,6 +77,7 @@ public:
     bool isDhcpAcquired();
 #endif
 protected:
+    friend class LWIPNetworkStack;
     struct netif ni;
 
     /*
@@ -106,7 +108,7 @@ protected:
 
 #ifdef CNETIF_STATS_ENABLED
 public:
-    netif_stats stats;
+    netif_stats stats; // FIXME decide how to handle this
 #endif
 };
 
@@ -119,7 +121,6 @@ public:
 class C33EthernetLWIPNetworkInterface: public LWIPNetworkInterface {
 public:
     C33EthernetLWIPNetworkInterface();
-    ~C33EthernetLWIPNetworkInterface();
 
     virtual void begin(const IPAddress &ip = INADDR_NONE, const IPAddress &nm = INADDR_NONE, const IPAddress &gw = INADDR_NONE) override;
     // virtual void task();
@@ -169,10 +170,18 @@ protected:
     virtual err_t output(struct netif* ni, struct pbuf* p) override;
 };
 
+
 class LWIPNetworkStack: public NetworkStack {
 public:
     LWIPNetworkStack(LWIPNetworkStack const&) = delete;
     void operator=(LWIPNetworkStack const&) = delete;
+
+
+    static LWIPNetworkStack& getInstance() {
+        //FIXME this doesn't to seem good
+        static LWIPNetworkStack instance; // this is private in case we need to synch the access to the singleton
+        return instance;
+    }
 
     // run polling tasks from all the LWIP Network Interfaces
     // this needs to be called in the loop() if we are not running it
@@ -182,13 +191,32 @@ public:
     // Function that provides a Client of the correct kind given the protocol provided in url
     // Client* connect(std::string url);
     // void request(std::string url, std::function<void(uint8_t*, size_t)>);
+
+    // function for setting an iface as default
+    void setDefaultIface(LWIPNetworkInterface* iface);
+
+    // functions that handle DNS resolution
+    // DNS servers are also set by dhcp
+#if defined(LWIP_DNS) && LWIP_DNS
+    // add a dns server, priority set to 0 means it is the first being queryed, -1 means the last
+    uint8_t addDnsServer(const IPAddress& aDNSServer, int8_t priority=-1);
+    void clearDnsServers();
+
+    // DNS resolution works with a callback if the resolution doesn't return immediately
+    int getHostByName(const char* aHostname, IPAddress& aResult, bool execute_task=false); // blocking call
+    int getHostByName(const char* aHostname, std::function<void(const IPAddress&)> cbk); // callback version
+#endif
 private:
     LWIPNetworkStack();
-    virtual ~LWIPNetworkStack();
 
     // TODO define a Timer for calling tasks
 
     std::vector<LWIPNetworkInterface*> ifaces;
 
+    virtual void add_iface(LWIPNetworkInterface* iface);
+    // virtual void del_iface(LWIPNetworkInterface* iface);
+
     // lwip stores the netif in a linked list called: netif_list
+
+    friend class LWIPNetworkInterface;
 };
