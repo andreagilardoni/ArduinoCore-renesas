@@ -15,6 +15,15 @@
 // #define CNETIF_STATS_ENABLED
 #include "CNetifStats.h"
 
+
+#define NETWORKSTACK_USE_TIMER
+
+#ifdef NETWORKSTACK_USE_TIMER
+#include <FspTimer.h>
+#endif // NETWORKSTACK_USE_TIMER
+
+void* buffer_allocator(unsigned int size);
+
 //forward declarations
 class LWIPNetworkStack;
 
@@ -219,4 +228,8 @@ private:
     // lwip stores the netif in a linked list called: netif_list
 
     friend class LWIPNetworkInterface;
+
+#ifdef NETWORKSTACK_USE_TIMER
+    FspTimer timer;
+#endif
 };

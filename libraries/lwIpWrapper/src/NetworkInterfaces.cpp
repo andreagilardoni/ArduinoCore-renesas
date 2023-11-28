@@ -6,6 +6,14 @@
 err_t _netif_init(struct netif* ni);
 err_t _netif_output(struct netif* ni, struct pbuf* p);
 
+#ifdef NETWORKSTACK_USE_TIMER
+static void timer_cb(timer_callback_args_t* arg);
+#endif
+
+#if LWIP_DNS
+static void _getHostByNameCBK(const char *name, const ip_addr_t *ipaddr, void *callback_arg);
+#endif // LWIP_DNS
+
 // Custom Pbuf definition used to handle RX zero copy
 // TODO make better documentation on how this works
 
@@ -247,11 +255,49 @@ void C33EthernetLWIPNetworkInterface::consume_callback(uint8_t* buffer, uint32_t
     } else {
         NETIF_STATS_INCREMENT_RX_BYTES(this->stats, p->len);
     }
+    arduino::unlock();
 }
 
 
 // LWIPNetworkStack
-LWIPNetworkStack::LWIPNetworkStack() { }
+#ifdef NETWORKSTACK_USE_TIMER
+static void timer_cb(timer_callback_args_t* arg) {
+    LWIPNetworkStack* context = (LWIPNetworkStack*)arg->p_context;
+
+    context->task();
+}
+#endif
+
+LWIPNetworkStack::LWIPNetworkStack() {
+#ifdef NETWORKSTACK_USE_TIMER
+    uint8_t type = 8;
+    int8_t ch = FspTimer::get_available_timer(type);
+
+    if (ch < 0) {
+        ch = FspTimer::get_available_timer(type, true);
+    }
+
+    /*
+     * NOTE Timer and buffer size
+     * The frequency for the timer highly influences the memory requirements for the desired transfer speed
+     * You can calculate the buffer size required to achieve that performance from the following formula:
+     * buffer_size[byte] = Speed[bit/s] * timer_frequency[Hz]^-1 / 8
+     *
+     * In the case of portenta C33, the maximum speed achievable was measured with
+     * iperf2 tool (provided by lwip) and can reach up to 12Mbit/s.
+     * Further improvements can be made, but if we desire to reach that speed the buffer size
+     * and the timer frequency should be designed accordingly.
+     * buffer = 12 * 10^6 bit/s * (100Hz)^-1 / 8 = 15000 Byte = 15KB
+     *
+     * Since this is a constrained environment we could accept performance loss and
+     * delegate lwip to handle lost packets.
+     */
+    timer.begin(TIMER_MODE_PERIODIC, type, ch, 100.0, 0, timer_cb, this);
+    timer.setup_overflow_irq();
+    timer.open();
+    timer.start();
+#endif
+}
 
 void LWIPNetworkStack::add_iface(LWIPNetworkInterface* iface) {
     // if it is the first interface set it as the default route
@@ -268,7 +314,9 @@ void LWIPNetworkStack::task() {
         iface->task();
     }
 
+    arduino::lock();
     sys_check_timeouts();
+    arduino::unlock();
 }
 
 void LWIPNetworkStack::setDefaultIface(LWIPNetworkInterface* iface) {
