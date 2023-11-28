@@ -110,11 +110,6 @@ err_t _netif_output(struct netif* ni, struct pbuf* p) {
 
 void LWIPNetworkInterface::task() {
 #ifdef LWIP_DHCP
-    // handle dhcp FSM
-    // if (dhcp_last_time_call == 0 || millis() - dhcp_last_time_call > DHCP_FINE_TIMER_MSECS) {
-        // dhcp_task();
-        // dhcp_last_time_call = millis();
-    // }
     // TODO we can add a lazy evaluated timer for this condition if dhcp_supplied_address takes too long
     if(!this->dhcp_acquired && dhcp_supplied_address(&this->ni)) {
         dhcp_acquired = true;
@@ -211,8 +206,6 @@ err_t C33EthernetLWIPNetworkInterface::init(struct netif* ni) {
 
 err_t C33EthernetLWIPNetworkInterface::output(struct netif* ni, struct pbuf* p) {
     err_t errval = ERR_OK;
-    NETIF_STATS_INCREMENT_TX_TRANSMIT_CALLS(this->stats);
-    NETIF_STATS_TX_TIME_START(this->stats);
 
     /* TODO check if this makes sense, I may get a pbuf chain
      * it could happen that if I get a pbuf chain
@@ -222,18 +215,27 @@ err_t C33EthernetLWIPNetworkInterface::output(struct netif* ni, struct pbuf* p) 
      */
     struct pbuf *q = p;
     do {
+        NETIF_STATS_INCREMENT_TX_TRANSMIT_CALLS(this->stats);
+        NETIF_STATS_TX_TIME_START(this->stats);
         auto err = C33EthernetDriver.send((uint8_t*)q->payload, q->len);
         if(err != 0) {
-
+            NETIF_STATS_INCREMENT_ERROR(this->stats, err);
             NETIF_STATS_INCREMENT_TX_TRANSMIT_FAILED_CALLS(this->stats);
             errval = ERR_IF;
             break;
         }
         q = q->next;
+
+        // FIXME remove this, only purpose is to verify if I ever deal with a pbuf chain
+        // if(q!=nullptr) {
+        //     NETIF_STATS_INCREMENT_ERROR(this->stats, 1024);
+        // }
+        NETIF_STATS_INCREMENT_TX_BYTES(this->stats, q->len);
+        NETIF_STATS_TX_TIME_AVERAGE(this->stats);
     } while(q != nullptr && errval != ERR_OK);
 
-    NETIF_STATS_INCREMENT_TX_BYTES(this->stats, p->len);
-    NETIF_STATS_TX_TIME_AVERAGE(this->stats);
+    // arduino::unlock();
+
     return errval;
 }
 
