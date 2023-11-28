@@ -164,9 +164,8 @@ err_t LWIPTCPClient::recv_callback(struct tcp_pcb* tpcb, struct pbuf* p, err_t e
 
         return ERR_OK;
     }
-
+    arduino::lock();
     if(this->state == TCP_CONNECTED) {
-        // __disable_irq(); // TODO redesign critical section handling
         if (this->pbuf_head == nullptr) {
             // no need to increment the references of the pbuf,
             // since it is already 1 and lwip shifts the control to this code
@@ -175,12 +174,10 @@ err_t LWIPTCPClient::recv_callback(struct tcp_pcb* tpcb, struct pbuf* p, err_t e
             // no need to increment the references of p, since it is already 1 and the only reference is this->pbuf_head->next
             pbuf_cat(this->pbuf_head, p);
         }
-        // __enable_irq();
 
         ret_err = ERR_OK;
     }
-
-    // DEBUG_INFO("head %08x, tot_len %6u New pbuf: %08x next %08x len %6u tot_len %6u", this->pbuf_head, this->pbuf_head->tot_len, p, p->next, p->len, p->tot_len);
+    arduino::unlock();
 
     return ret_err;
 }
@@ -188,6 +185,8 @@ err_t LWIPTCPClient::recv_callback(struct tcp_pcb* tpcb, struct pbuf* p, err_t e
 // copy a buffer from the app level to the send buffer of lwip
 // TODO understand how to handle a zero copy mode
 size_t LWIPTCPClient::write(const uint8_t* buffer, size_t size) {
+    arduino::lock();
+
     uint8_t* buffer_cursor = (uint8_t*)buffer;
     uint8_t bytes_to_send = 0;
 
@@ -209,11 +208,12 @@ size_t LWIPTCPClient::write(const uint8_t* buffer, size_t size) {
 
         // TODO understand if the tcp_write will send data if the buffer is not full
         // force send only if we filled the send buffer
-        if (ERR_OK != tcp_output(this->pcb)) {
-            // return 0;
-            break;
-        }
+        // if (ERR_OK != tcp_output(this->pcb)) {
+        //     // return 0;
+        //     break;
+        // }
     } while(buffer_cursor < buffer + size);
+    arduino::unlock();
 
     return buffer - buffer_cursor;
 }
@@ -250,9 +250,12 @@ int LWIPTCPClient::read(uint8_t* buffer, size_t buffer_size) {
      * meaning that across different calls of this function a pbuf could be partially copied
      * we need to account that
      */
+    arduino::lock();
     uint16_t copied = pbuf_copy_partial(this->pbuf_head, buffer, buffer_size, this->pbuf_offset);
 
     this->free_pbuf_chain(copied);
+    // __enable_irq();
+    arduino::unlock();
 
     return copied;
 }
@@ -270,13 +273,13 @@ uint8_t LWIPTCPClient::status() {
 }
 
 void LWIPTCPClient::free_pbuf_chain(uint16_t copied) {
+    arduino::lock();
     /*
      * free pbufs that have been copied, if copied == 0 we have an error
      * free the buffer chain starting from the head up to the last entire pbuf ingested
      * taking into account the previously not entirely consumed pbuf
      */
     uint32_t tobefreed = 0;
-    // DEBUG_INFO("cleaning up");
     copied += this->pbuf_offset;
 
     // in order to clean up the chain we need to find the pbuf in the last pbuf in the chain
@@ -304,14 +307,13 @@ void LWIPTCPClient::free_pbuf_chain(uint16_t copied) {
     // free the chain if we haven't copied entirely the first pbuf (prev == nullptr)
     if(this->pbuf_head != head) {
         uint8_t refs = pbuf_free(head);
-
-        // DEBUG_INFO("Freed: %2u", refs);
     }
 
     this->pbuf_offset = copied - tobefreed; // This offset should be referenced to the first pbuf in queue
 
     // acknowledge the received data
     tcp_recved(this->pcb, copied);
+    arduino::unlock();
 }
 
 void LWIPTCPClient::stop() {
@@ -353,6 +355,7 @@ size_t LWIPTCPClient::read_until_token(
     if(buffer_size==0 || buffer==nullptr || this->pbuf_head==nullptr) {
         return 0; // TODO extend checks
     }
+    arduino::lock();
     // TODO check that the buffer size is less than the token len
 
     uint16_t offset=this->pbuf_offset;
@@ -388,6 +391,7 @@ size_t LWIPTCPClient::read_until_token(
     uint16_t copied = pbuf_copy_partial(this->pbuf_head, (uint8_t*)buffer, buf_copy_len, this->pbuf_offset);
 
     this->free_pbuf_chain(copied);
+    arduino::unlock();
 
     return copied;
 }
