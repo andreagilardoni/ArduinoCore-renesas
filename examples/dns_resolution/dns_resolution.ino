@@ -15,7 +15,7 @@ void setup() {
     while(!Serial);
 
     lwip_init();
-
+    LWIPNetworkStack::getInstance();
     DEBUG_INFO("Setting up driver");
     C33EthernetDriver.begin();
 
@@ -26,7 +26,9 @@ void setup() {
 }
 
 void loop() {
+#ifndef NETWORKSTACK_USE_TIMER
     LWIPNetworkStack::getInstance().task();
+#endif
 
     application();
 }
@@ -87,7 +89,11 @@ void application() {
         auto res = LWIPNetworkStack::getInstance().getHostByName(
             domains[counter % (sizeof(domains)/sizeof(char*))],
             ip,
+#ifndef NETWORKSTACK_USE_TIMER
             true);
+#else
+            false);
+#endif
 
         counter++;
         DEBUG_INFO("DNS %u request performed for %s: %u %s ",
