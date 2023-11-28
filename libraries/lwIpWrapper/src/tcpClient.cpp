@@ -1,7 +1,6 @@
 #include "tcpClient.h"
 #include <Arduino.h>
 #include "utils.h"
-#include <Arduino_DebugUtils.h>
 
 // Forward declarations
 err_t _lwip_tcp_connected_callback(void* arg, struct tcp_pcb* tpcb, err_t err);
@@ -9,6 +8,7 @@ err_t _lwip_tcp_recv_callback(void* arg, struct tcp_pcb* tpcb, struct pbuf* p, e
 static err_t _lwip_tcp_sent_callback(void* arg, struct tcp_pcb* tpcb, u16_t len);
 void _lwip_tcp_err_callback(void *arg, err_t err);
 
+// FIXME understand hos to syncronize the interrupt thread and "userspace"
 // TODO look into tcp_bind_netif for Ethernet and WiFiClient classes
 // TODO generalize the functions for extracting and inserting data into pbufs, they may be reused in UDP
 // TODO look into application polling:
@@ -129,8 +129,7 @@ void _lwip_tcp_err_callback(void *arg, err_t err) {
     }
 
     LWIPTCPClient* client = (LWIPTCPClient*)arg;
-
-    DEBUG_INFO("TCP error %u", err);
+    // TODO add a callback for tcp errors in LWIPTCPClient
 }
 
 err_t _lwip_tcp_recv_callback(void* arg, struct tcp_pcb* tpcb, struct pbuf* p, err_t err) {
@@ -152,14 +151,12 @@ err_t LWIPTCPClient::recv_callback(struct tcp_pcb* tpcb, struct pbuf* p, err_t e
 
     // FIXME this checks should be done on every callback
     if(err != ERR_OK) {
-        // _lwip_tcp_connection_close(tpcb, tcp_arg);
         this->stop();
         return err;
     }
 
     if (p == NULL) {
         // Remote host has closed the connection -> close from our side
-        // _lwip_tcp_connection_close(tpcb, tcp_arg);
         this->stop();
 
         return ERR_OK;
@@ -235,7 +232,6 @@ int LWIPTCPClient::available() {
 // copy data from lwip buffers to the application level
 // FIXME consider synchronization issues while calling this function, interrupts may cause issues
 int LWIPTCPClient::read(uint8_t* buffer, size_t buffer_size) {
-
     if(buffer_size==0 || buffer==nullptr || this->pbuf_head==nullptr) {
         return 0; // TODO extend checks
     }
@@ -351,7 +347,6 @@ LWIPTCPClient::operator bool() {
 // this allows the user to avoid using temporary buffers
 size_t LWIPTCPClient::read_until_token(
     const uint8_t* buffer, uint16_t buffer_size, char* token, bool &found) {
-
     if(buffer_size==0 || buffer==nullptr || this->pbuf_head==nullptr) {
         return 0; // TODO extend checks
     }
