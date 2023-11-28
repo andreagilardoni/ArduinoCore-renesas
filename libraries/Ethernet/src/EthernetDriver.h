@@ -136,7 +136,6 @@ private:
     // uint8_t tx_buffer[1536];
     volatile bool frame_in_transmission = false;
 
-    // TODO macaddress setter
     uint8_t macaddress[8]; // FIXME differentiate between 6 and 8 len
     uint8_t macaddress_len = 0;
 

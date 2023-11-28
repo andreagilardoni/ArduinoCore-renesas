@@ -49,7 +49,7 @@ buffer_allocator(buffer_allocator), buffer_size(buffer_size) {
     rx_buffers      = (uint8_t**) malloc(sizeof(void*)*rx_descriptors_len);
 
     tx_buffers_info = (_tx_buffer_info*) malloc(sizeof(_tx_buffer_info)*tx_descriptors_len);
-    memset(tx_buffers_info, 0, sizeof(_tx_buffer_info)*tx_descriptors_len); // FIXME does this set everython to 0
+    memset(tx_buffers_info, 0, sizeof(_tx_buffer_info)*tx_descriptors_len);
 
     this->init();
 }
