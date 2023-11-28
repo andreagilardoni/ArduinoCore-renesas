@@ -206,7 +206,7 @@ public:
 
     // functions that handle DNS resolution
     // DNS servers are also set by dhcp
-#if defined(LWIP_DNS) && LWIP_DNS
+#if LWIP_DNS
     // add a dns server, priority set to 0 means it is the first being queryed, -1 means the last
     uint8_t addDnsServer(const IPAddress& aDNSServer, int8_t priority=-1);
     void clearDnsServers();

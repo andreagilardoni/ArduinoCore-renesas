@@ -325,7 +325,7 @@ void LWIPNetworkStack::setDefaultIface(LWIPNetworkInterface* iface) {
     netif_set_default(&iface->ni);
 }
 
-#if defined(LWIP_DNS) && LWIP_DNS
+#if LWIP_DNS
 
 struct dns_callback {
     std::function<void(const IPAddress&)> cbk;
