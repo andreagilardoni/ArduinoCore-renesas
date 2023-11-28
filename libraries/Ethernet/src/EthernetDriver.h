@@ -154,6 +154,8 @@ private:
     void* (*buffer_allocator)(unsigned int);
     uint16_t buffer_size;
 
+    bool consumed = false;
+
     // This function initializes the driver and its configuration
     // TODO provide a way for the user to override the settings
     void init();

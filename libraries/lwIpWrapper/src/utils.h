@@ -1,4 +1,6 @@
 #pragma once
+#include <Arduino.h>
+#include "lwip/include/lwip/ip_addr.h"
 
 inline ip_addr_t fromArduinoIP(const IPAddress& ip) {
 #if LWIP_IPV4
@@ -59,4 +61,26 @@ inline IPAddress toArduinoIP(const ip_addr_t* ip) {
 #endif
 
     return INADDR_NONE;
+}
+
+
+namespace arduino {
+    // TODO leverage on RAII
+    extern volatile uint32_t lock_counter;
+    inline void lock() {
+        if(lock_counter == 0) { // FIXME the following 2 commands should be executed atomically
+            __disable_irq();
+        }
+        lock_counter++;
+    }
+
+    inline void unlock() {
+        if(lock_counter > 0) {
+            lock_counter--;
+        }
+
+        if(lock_counter == 0) {
+            __enable_irq(); // this could be called multiple times if the calls are not setup properly
+        }
+    }
 }

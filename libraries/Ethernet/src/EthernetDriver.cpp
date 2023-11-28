@@ -1,7 +1,9 @@
 #include "EthernetDriver.h"
 #include <IRQManager.h>
 #include <malloc.h>
+#include "utils.h"
 #include <Arduino_DebugUtils.h>
+
 
 #define ETHERNET_PIN_CFG ((uint32_t) ((uint32_t) IOPORT_CFG_PERIPHERAL_PIN | (uint32_t) IOPORT_PERIPHERAL_ETHER_RMII))
 #define ETHERNET_CHANNEL                        (0)
@@ -145,8 +147,14 @@ void EthernetC33Driver::poll() {
     fsp_err_t err = FSP_SUCCESS;
     struct pbuf *p = nullptr;
 
-    while(ETHER_RD0_RACT != (ctrl.p_rx_descriptor->status & ETHER_RD0_RACT)) {
+    if(this->consume_cbk == nullptr) {
+        // Callback is not set, no meaning to release buffers
+        // TODO put assertion
+        return;
+    }
 
+    // arduino::lock();
+    while(ETHER_RD0_RACT != (ctrl.p_rx_descriptor->status & ETHER_RD0_RACT)) {
         // NETIF_STATS_RX_TIME_START(_stats); // FIXME add stats
         // NETIF_STATS_INCREMENT_RX_INTERRUPT_CALLS(_stats);
         // Getting the available data in the Eth DMA buffer
@@ -165,30 +173,31 @@ void EthernetC33Driver::poll() {
 
         // giving the ownership of the buffer to the module using the driver,
         // this memory should be now handled by the new owner
-        if(this->consume_cbk != nullptr) {
+        if(!this->consumed) {
+            // DEBUG_INFO("buf %8X", rx_frame_buf);
             this->consume_cbk(rx_frame_buf, rx_frame_dim);
-        } else {
-            // Callback is not set, no meaning to release buffers
-            // TODO put assertion
-            break;
         }
 
         // TODO find a way to put a limit into the number of mem_malloc
-        // FIXME mem_malloc could return nullptr if no space is availabe
-
+        arduino::lock();
         uint8_t* new_buffer = (uint8_t*)buffer_allocator(buffer_size);
+        arduino::unlock();
 
         if(new_buffer == nullptr) {
-            // FIXME handle the error
-
+            this->consumed = true; // this indicates that the buffer had been consumed, but the new buffer isn't allocated
             break;
+        } else {
+            this->consumed = false; // this indicates that the buffer had been consumed and the new buffer is allocated
         }
-
         err = R_ETHER_RxBufferUpdate(&ctrl, new_buffer);
         // NETIF_STATS_INCREMENT_ERROR(_stats, err);
         // NETIF_STATS_RX_TIME_AVERAGE(_stats);
         // NETIF_STATS_INCREMENT_RX_INTERRUPT_CALLS(_stats);
+        if(err != FSP_SUCCESS) {
+            // DEBUG_INFO("%u", err); // FIXME handle this
+        }
     }
+    // arduino::unlock();
 
     // Polling the tx descriptor for Tx transmission completed
     // while(R_ETHER_TxStatusGet(this->ctrl, tx_buffers_info[first].buffer) {
@@ -212,58 +221,49 @@ network_driver_send_err_t EthernetC33Driver::send(
     // dump_buffer(tx_buffers_info[last].buffer, len);
     // dump_buffer(data, len);
     // DEBUG_INFO("[send] %08X, %u", data, len);
-    __disable_irq();
-    if(tx_buffers_info[last].len != 0) { // no available buffer
-        DEBUG_INFO("[send] error");
+    network_driver_send_err_t res = NETWORK_DRIVER_SEND_ERR_OK;
+    fsp_err_t err;
 
-        return NETWORK_DRIVER_SEND_ERR_BUFFER;
+    arduino::lock();
+    // the current buffer we are referencing is not yet consumed
+    if(this->tx_buffers_info[this->last].len != 0) {
+        res = NETWORK_DRIVER_SEND_ERR_BUFFER;
+        goto exit;
     }
-
-    tx_buffers_info[last].len = len;
-    tx_buffers_info[last].free_function = free_function;
 
     if(flags == NETWORK_DRIVER_SEND_FLAGS_NONE) {
         // it could be nice to use buffer_allocator, but we need a way to deallocate it
-        tx_buffers_info[last].buffer = (uint8_t*)memalign(32, len); // TODO does this need to be memaligned? I think not
+        this->tx_buffers_info[this->last].buffer = (uint8_t*)memalign(32, len); // TODO does this need to be memaligned? I think not
+
+        if(this->tx_buffers_info[this->last].buffer == nullptr) {
+            res = NETWORK_DRIVER_SEND_ERR_BUFFER;
+            goto exit;
+        }
 
         // perform a memcpy to the local tx_buffer
-        memcpy(tx_buffers_info[last].buffer, data, len);
+        memcpy(this->tx_buffers_info[this->last].buffer, data, len);
     } else if(flags == NETWORK_DRIVER_SEND_FLAGS_ZERO_COPY) {
-        tx_buffers_info[last].buffer = data; // FIXME verify this mode
+        this->tx_buffers_info[this->last].buffer = data; // FIXME verify this mode
     }
 
-    // dump_buffer(tx_buffers_info[last].buffer, len);
+    this->tx_buffers_info[this->last].len = len;
+    this->tx_buffers_info[this->last].free_function = free_function;
+
+    // dump_buffer(this->tx_buffers_info[this->last].buffer, len);
     // dump_buffer(data, len);
 
     // put this buffer in the next circular buffer position and then increment the index
-    // tx_buffers_info[last] = to_send;
     // TODO handle the case where a packet is already being transmitted, should WRITE be called after the queued packet is correctly sent?
-    fsp_err_t err = R_ETHER_Write(
-        &this->ctrl, tx_buffers_info[last].buffer, tx_buffers_info[last].len);
-    last = (last + 1) % tx_descriptors_len;
-    __enable_irq();
-
-    // single tx buffer implementation
-    // __disable_irq();
-    // if(frame_in_transmission) {
-    //     DEBUG_INFO("[send] error");
-    //     return NETWORK_DRIVER_SEND_ERR_BUFFER;
-    // }
-
-    // memcpy(tx_buffer, data, len);
-    // dump_buffer(tx_buffer, len);
-    // dump_buffer(data, len);
-
-    // fsp_err_t err = R_ETHER_Write(&this->ctrl, tx_buffer, len);
-    // frame_in_transmission = true;
-    // __enable_irq();
-
-    if(err == FSP_SUCCESS) {
-        return NETWORK_DRIVER_SEND_ERR_OK;
-    } else {
-        DEBUG_INFO("[send] R_ETHER_Write error %u", err);
-        return NETWORK_DRIVER_SEND_ERR_DRIVER;
+    err = R_ETHER_Write(
+        &this->ctrl, this->tx_buffers_info[this->last].buffer, this->tx_buffers_info[this->last].len);
+    this->last = (this->last + 1) % this->tx_descriptors_len;
+    if(err != FSP_SUCCESS) {
+        res = NETWORK_DRIVER_SEND_ERR_DRIVER;
     }
+
+exit:
+    arduino::unlock();
+    return res;
 }
 
 fsp_err_t EthernetC33Driver::open() {
@@ -349,11 +349,15 @@ void EthernetC33Driver::irq_ether_callback(ether_callback_args_t* p_args) {
                 }
             }
             if (ETHER_FRAME_TRANSFER_COMPLETED  == (reg_eesr & ETHER_FRAME_TRANSFER_COMPLETED)) {
-                __disable_irq();
+
 
                 // FIXME check that first and the completed packet are valid
                 // FIXME move this into the poll function
-                tx_buffers_info[first].len = 0;
+                // FIXME define a function out of this
+                if(tx_buffers_info[first].len == 0 || tx_buffers_info[first].buffer == nullptr) {
+                    return;
+                }
+                arduino::lock();
 
                 if(tx_buffers_info[first].free_function) {
                     tx_buffers_info[first].free_function(tx_buffers_info[first].buffer);
@@ -361,10 +365,11 @@ void EthernetC33Driver::irq_ether_callback(ether_callback_args_t* p_args) {
                 } else {
                     free(tx_buffers_info[first].buffer);
                 }
+                tx_buffers_info[first].len = 0;
                 tx_buffers_info[first].buffer = nullptr;
                 first = (first + 1) % tx_descriptors_len;
-                // frame_in_transmission = false;
-                __enable_irq();
+                arduino::unlock();
+
 
                 if(this->tx_frame_cbk != nullptr) {
                     this->tx_frame_cbk();
