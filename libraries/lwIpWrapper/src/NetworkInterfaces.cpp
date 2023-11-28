@@ -26,6 +26,7 @@ static void zerocopy_pbuf_free(struct pbuf *p) {
     // SYS_ARCH_DECL_PROTECT(zerocopy_pbuf_free);
     zerocopy_pbuf_t* zcpbuf = (zerocopy_pbuf_t*) p;
 
+    arduino::lock();
     // SYS_ARCH_PROTECT(zerocopy_pbuf_free);
 
     // FIXME pbufs may be allocated in a different memory pool, deallocate them accordingly
@@ -33,6 +34,8 @@ static void zerocopy_pbuf_free(struct pbuf *p) {
     zcpbuf->buffer = nullptr;
     mem_free(zcpbuf); // TODO understand if pbuf_free deletes the pbuf
     // SYS_ARCH_UNPROTECT(zerocopy_pbuf_free);
+
+    arduino::unlock();
 }
 
 static inline zerocopy_pbuf_t* get_zerocopy_pbuf(uint8_t *buffer) {
@@ -236,7 +239,7 @@ err_t C33EthernetLWIPNetworkInterface::output(struct netif* ni, struct pbuf* p) 
 
 void C33EthernetLWIPNetworkInterface::consume_callback(uint8_t* buffer, uint32_t len) {
     // TODO understand if this callback can be moved into the base class
-
+    arduino::lock();
     NETIF_STATS_INCREMENT_RX_INTERRUPT_CALLS(this->stats);
     zerocopy_pbuf_t *custom_pbuf = get_zerocopy_pbuf(buffer);
 
