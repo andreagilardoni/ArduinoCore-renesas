@@ -11,6 +11,8 @@
 #include "lwip/include/lwip/udp.h"
 #include "lwip/include/netif/ethernet.h"
 #include <EthernetDriver.h>
+#include "CCtrlWrapper.h"
+#include "CEspControl.h"
 
 // #define CNETIF_STATS_ENABLED
 #include "CNetifStats.h"
@@ -148,19 +150,67 @@ private:
     void consume_callback(uint8_t* buffer, uint32_t len);
 };
 
+typedef enum {
+    WL_NO_SHIELD = 255,
+    WL_NO_MODULE = WL_NO_SHIELD,
+    WL_IDLE_STATUS = 0,
+    WL_NO_SSID_AVAIL,
+    WL_SCAN_COMPLETED,
+    WL_CONNECTED,
+    WL_CONNECT_FAILED,
+    WL_CONNECTION_LOST,
+    WL_DISCONNECTED,
+    WL_AP_LISTENING,
+    WL_AP_CONNECTED,
+    WL_AP_FAILED
+} WifiStatus_t;
+
+/* Encryption modes */
+enum wl_enc_type {
+    ENC_TYPE_WEP,
+    ENC_TYPE_WPA,
+    ENC_TYPE_WPA2,
+    ENC_TYPE_WPA2_ENTERPRISE,
+    ENC_TYPE_WPA3,
+    ENC_TYPE_NONE,
+    ENC_TYPE_AUTO,
+
+    ENC_TYPE_UNKNOWN = 255
+};
+
+// TODO there should be an intermediate interface class for wifi based devices
 class WiFIStationLWIPNetworkInterface: public LWIPNetworkInterface {
 public:
-    // TODO add all the specific methods for wifi modules
+    WiFIStationLWIPNetworkInterface();
+
+    int begin();
+    int connectToAP(const char* ssid, const char *passphrase=nullptr);
+    void init();
+
     virtual const char* getSSID();
     virtual uint8_t* getBSSID(uint8_t* bssid);
     virtual int32_t getRSSI();
     virtual uint8_t getEncryptionType();
+    int scanForAp();
+    void printAps();
+
+    void task() override;
 protected:
-    static const char prefix = 'w';
-    // static uint8_t id;
+    static const char wifistation_ifname_prefix = 'w';
+    static uint8_t wifistation_id;
 
     virtual err_t init(struct netif* ni) override;
     virtual err_t output(struct netif* ni, struct pbuf* p) override;
+
+private:
+    /*
+     * This function is passed to the driver class and it is meant to
+     * take a pointer to a buffer, and pass it to lwip to process it
+     */
+    void consume_callback(uint8_t* buffer, uint32_t len);
+
+    WifiApCfg_t access_point_cfg;
+    std::vector<AccessPoint_t> access_points;
 };
 
 class SoftAPLWIPNetworkInterface: public LWIPNetworkInterface {
