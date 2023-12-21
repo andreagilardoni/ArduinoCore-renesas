@@ -19,25 +19,8 @@ char cnetif_stats_buffer[STATS_BUFFER_SIZE];
 #include <EthernetDriver.h>
 #include <tcpClient.h>
 
-// lwip libraries
-// #include <lwip/dhcp.h>
-// #include <lwip/dns.h>
-// #include <lwip/init.h>
-// #include <lwip/ip_addr.h>
-// #include <lwip/opt.h>
-// #include <lwip/prot/dhcp.h>
-// #include <lwip/tcp.h>
-// #include <lwip/timeouts.h>
-// #include <lwip/udp.h>
-// #include <netif/ethernet.h>
-// #include <lwIP_Arduino.h>
-// #include <lwip/include/lwip/tcp.h>
-// #include <lwip/include/lwip/mem.h>
-#include <lwip/include/lwip/apps/lwiperf.h>
-// #include <lwip/apps/lwiperf.h>
 extern "C" void sys_printf(const char *format, ...);
 
-#include "FspTimer.h"
 #include "IPAddress.h"
 
 // IPAddress default_ip("192.168.10.130");
@@ -54,9 +37,6 @@ ip_addr_t gw;
 #define LOOP_MIN_DURATION 100 // us
 
 /* --------------------------------------- */
-void lwip_iperf_report_fn(void *arg, enum lwiperf_report_type report_type,
-  const ip_addr_t* local_addr, u16_t local_port, const ip_addr_t* remote_addr, u16_t remote_port,
-  u32_t bytes_transferred, u32_t ms_duration, u32_t bandwidth_kbitpsec);
 void timer_cb(timer_callback_args_t *arg);
 void application();
 void dump_buffer(uint8_t* b, uint32_t len, uint8_t blocks=4, uint8_t cols=16);
@@ -69,8 +49,8 @@ uint64_t debug_start;
 /* --------------------------------------- */
 
 // EthernetC33Driver C33EthernetDriver(1, 1, mem_malloc, 1536);
-// EthernetC33Driver C33EthernetDriver(2, 2, mem_malloc, 1536); // TODO make a global vasriable out of this
-EthernetC33Driver C33EthernetDriver(2, 2, buffer_allocator, 1536); // TODO make a global vasriable out of this
+EthernetC33Driver C33EthernetDriver(2, 2, mem_malloc, 1536); // TODO make a global vasriable out of this
+// EthernetC33Driver C33EthernetDriver(2, 2, buffer_allocator, 1536); // TODO make a global vasriable out of this
 // EthernetC33Driver<2, 1, mem_malloc, 1536> C33EthernetDriver;
 C33EthernetLWIPNetworkInterface C33EthernetIface;
 
@@ -86,8 +66,6 @@ void setup() {
   LWIPNetworkStack::getInstance(); // TODO make this automatic
   C33EthernetDriver.begin();
 
-  // C33EthernetDriver.setConsumeCallback(consume_callback);
-
   // setup netif
   // IP_ADDR4(&ip, 192, 168, 10, 130);
   // IP_ADDR4(&nm, 255, 255, 255, 0);
@@ -96,6 +74,7 @@ void setup() {
   DEBUG_INFO("Setting up netif");
   // C33EthernetIface.begin(&ip, &nm, &gw);
   C33EthernetIface.begin();
+
   delay(100); // FIXME dhcp doesn't work properly without this
   // C33EthernetIface.begin();
 
@@ -149,17 +128,6 @@ void loop() {
   // }
   counter++;
   // delay(10);
-}
-
-void lwip_iperf_report_fn(void *arg, enum lwiperf_report_type report_type,
-  const ip_addr_t* local_addr, u16_t local_port, const ip_addr_t* remote_addr, u16_t remote_port,
-  u32_t bytes_transferred, u32_t ms_duration, u32_t bandwidth_kbitpsec){
-  LWIP_UNUSED_ARG(arg);
-  LWIP_UNUSED_ARG(local_addr);
-  LWIP_UNUSED_ARG(local_port);
-
-  DEBUG_INFO("IPERF report: type=%d, remote: %s:%d, total bytes: %d, duration in ms: %d, kbits/s: %d\n",
-    (int)report_type, ipaddr_ntoa(remote_addr), (int)remote_port, bytes_transferred, ms_duration, bandwidth_kbitpsec);
 }
 
 // Application level Stuff
