@@ -218,18 +218,30 @@ private:
 
 class SoftAPLWIPNetworkInterface: public LWIPNetworkInterface {
 public:
+    SoftAPLWIPNetworkInterface();
+
+    int begin();
+
     // TODO add all the specific methods for wifi modules
     virtual const char* getSSID();
     virtual uint8_t* getBSSID(uint8_t* bssid);
-    virtual int32_t getRSSI();
     virtual uint8_t getEncryptionType();
+
+    int startSoftAp(const char* ssid, const char* passphrase=nullptr, uint8_t channel=0);
+    int stopSoftAp();
+
+    void task() override;
 protected:
     // FIXME understand the cpp way of setting this pointer
-    static const char prefix = 's';
-    // static uint8_t id = 0;
+    static const char softap_ifname_prefix = 's';
+    static uint8_t softap_id;
 
     virtual err_t init(struct netif* ni) override;
     virtual err_t output(struct netif* ni, struct pbuf* p) override;
+
+private:
+    SoftApCfg_t soft_ap_cfg;
+    bool hw_init; // TODO this should be moved to the wifi driver class
 };
 
 

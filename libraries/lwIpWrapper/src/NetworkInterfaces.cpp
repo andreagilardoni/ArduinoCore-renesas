@@ -2,6 +2,8 @@
 #include <functional>
 #include "utils.h"
 
+extern "C" void dhcps_start(struct netif *netif);
+
 err_t _netif_init(struct netif* ni);
 err_t _netif_output(struct netif* ni, struct pbuf* p);
 
@@ -596,6 +598,235 @@ static uint8_t Encr2wl_enc(int enc) {
     } else {
         return ENC_TYPE_UNKNOWN;
     }
+}
+
+// SoftAPLWIPNetworkInterface
+uint8_t SoftAPLWIPNetworkInterface::softap_id = 0;
+
+// This is required for dhcp server to assign ip addresses to AP clients
+IPAddress default_nm("255.255.255.0");
+IPAddress default_dhcp_server_ip("192.168.4.1");
+
+SoftAPLWIPNetworkInterface::SoftAPLWIPNetworkInterface()
+: hw_init(false) {
+
+}
+
+int SoftAPLWIPNetworkInterface::begin() { // TODO This should be called only once, make it private
+    int res = 0;
+    int time_num = 0;
+
+    // arduino::lock();
+    CEspControl::getInstance().listenForInitEvent([this] (CCtrlMsgWrapper *resp) -> int {
+        // Serial.println("init");
+        this->hw_init = true;
+        return ESP_CONTROL_OK;
+    });
+
+    if ((res=CEspControl::getInstance().initSpiDriver()) != 0) {
+        // res = -1; // FIXME put a proper error code
+        goto exit;
+    }
+
+    while (time_num < 100 && !hw_init) { // TODO #define WIFI_INIT_TIMEOUT_MS 10000
+        CEspControl::getInstance().communicateWithEsp();
+        R_BSP_SoftwareDelay(100, BSP_DELAY_UNITS_MILLISECONDS);
+        time_num++;
+    }
+
+    res = CEspControl::getInstance().setWifiMode(WIFI_MODE_AP);
+
+    // netif_set_link_up(&this->ni); // TODO this should be set only when successfully connected to an AP
+    LWIPNetworkInterface::begin(
+        default_dhcp_server_ip,
+        default_nm,
+        default_dhcp_server_ip
+    );
+exit:
+    // arduino::unlock();
+    return res;
+}
+
+// TODO scan the other access point first and then set the channel if 0
+// TODO there are requirements for ssid and password
+int SoftAPLWIPNetworkInterface::startSoftAp(const char* ssid, const char* passphrase, uint8_t channel) {
+    SoftApCfg_t cfg;
+
+    strncpy((char*)cfg.ssid, ssid, SSID_LENGTH);
+    // memset(cfg.ssid, 0x00, SSID_LENGTH);
+    // memcpy(cfg.ssid, ssid, (strlen(ssid) < SSID_LENGTH) ? strlen(ssid) : SSID_LENGTH);
+    // memset(cfg.pwd, 0x00, PASSWORD_LENGTH);
+    if (passphrase == nullptr) {
+        cfg.pwd[0] = '\0';
+        cfg.encryption_mode = WIFI_AUTH_OPEN;
+    } else {
+        auto slen = strlen(passphrase)+1;
+        strncpy((char*)cfg.pwd, passphrase, (slen < PASSWORD_LENGTH) ? slen : PASSWORD_LENGTH);
+
+        cfg.encryption_mode = WIFI_AUTH_WPA_WPA2_PSK;
+    }
+
+    channel = (channel == 0) ? 1 : channel;
+    cfg.channel = (channel > MAX_CHNL_NO) ? MAX_CHNL_NO : channel;
+    cfg.max_connections = MAX_SOFAT_CONNECTION_DEF;
+    cfg.bandwidth = WIFI_BW_HT40;
+    cfg.ssid_hidden = false;
+
+    int rv = CEspControl::getInstance().startSoftAccessPoint(cfg);
+    if (rv == ESP_CONTROL_OK) {
+        CEspControl::getInstance().getSoftAccessPointConfig(soft_ap_cfg);
+        // wifi_status = WL_AP_LISTENING;
+        netif_set_link_up(&this->ni);
+
+        // FIXME the dhcp server should be started somewhere else
+        dhcps_start(&(this->ni));
+    } else {
+        // wifi_status = WL_AP_FAILED;
+    }
+
+
+    return rv;
+}
+
+int SoftAPLWIPNetworkInterface::stopSoftAp() {
+
+}
+
+err_t SoftAPLWIPNetworkInterface::init(struct netif* ni) {
+    // Setting up netif
+#if LWIP_NETIF_HOSTNAME
+    // TODO pass the hostname in the constructor os with a setter
+    ni->hostname                       = "C33-SoftAP";
+#endif
+    ni->name[0]                        = SoftAPLWIPNetworkInterface::softap_ifname_prefix;
+    ni->name[1]                        = '0' + SoftAPLWIPNetworkInterface::softap_id++;
+    ni->mtu                            = 1500; // FIXME get this from the network
+    ni->flags                          |= NETIF_FLAG_BROADCAST | NETIF_FLAG_ETHARP;
+
+    WifiMac_t MAC;
+    MAC.mode = WIFI_MODE_AP;
+    CEspControl::getInstance().getWifiMacAddress(MAC);
+    CNetUtilities::macStr2macArray(ni->hwaddr, MAC.mac);
+    ni->hwaddr_len = 6; // FIXME this should be a macro defined somewhere
+
+    ni->output                         = etharp_output;
+    ni->linkoutput                     = _netif_output;
+
+    return ERR_OK;
+}
+
+err_t SoftAPLWIPNetworkInterface::output(struct netif* _ni, struct pbuf* p) {
+    // FIXME set ifn
+    int ifn = 0; // interface number in CNetif.cpp seems to not be set anywhere
+    uint8_t *buf = nullptr;
+    uint16_t size=p->tot_len;
+    err_t errval = ERR_IF;
+    int err = ESP_CONTROL_OK;
+
+    NETIF_STATS_INCREMENT_TX_TRANSMIT_CALLS(this->stats);
+    NETIF_STATS_TX_TIME_START(this->stats);
+
+    // arduino::lock();
+    // p may be a chain of pbufs
+    if(p->next != nullptr) {
+        buf = (uint8_t*) malloc(size*sizeof(uint8_t));
+        if(buf == nullptr) {\
+            NETIF_STATS_INCREMENT_ERROR(this->stats, ERR_MEM);
+            NETIF_STATS_INCREMENT_TX_TRANSMIT_FAILED_CALLS(this->stats);
+            errval = ERR_MEM;
+            goto exit;
+        }
+
+        // copy the content of pbuf
+        assert(pbuf_copy_partial(p, buf, size, 0) == size);
+    } else {
+        buf = (uint8_t*)p->payload;
+    }
+
+    // sendBuffer makes a memcpy of buffer
+    // TODO send buffer should handle the buffer deletion and avoid a memcpy
+    if ((err = CEspControl::getInstance().sendBuffer(
+            ESP_AP_IF, ifn, buf, size)) == ESP_CONTROL_OK) {
+        errval = ERR_OK;
+        NETIF_STATS_INCREMENT_TX_BYTES(this->stats, size);
+        NETIF_STATS_TX_TIME_AVERAGE(this->stats);
+    } else {
+        NETIF_STATS_INCREMENT_ERROR(this->stats, err);
+        NETIF_STATS_INCREMENT_TX_TRANSMIT_FAILED_CALLS(this->stats);
+    }
+
+exit:
+    if(p->next != nullptr && buf != nullptr) {
+        free(buf);
+    }
+    // arduino::unlock();
+    return errval;
+}
+
+void SoftAPLWIPNetworkInterface::task() {
+    // calling the base class task, in order to make thigs work
+    LWIPNetworkInterface::task();
+
+    // TODO in order to make things easier this should be implemented inside of Wifi driver
+    // and not override LWIPInterface method
+
+    uint8_t if_num = 0;
+    uint16_t dim = 0;
+    uint8_t* buffer = nullptr;
+    struct pbuf* p = nullptr;
+
+    NETIF_STATS_RX_TIME_START(this->stats);
+    // arduino::lock();
+    // TODO do not perform this when not connected to an AP
+    if(hw_init) {
+        CEspControl::getInstance().communicateWithEsp(); // TODO make this shared between SoftAP and station
+
+        // TODO handling buffer this way may be harmful for the memory
+        buffer = CEspControl::getInstance().getSoftApRx(if_num, dim);
+    }
+
+    // empty the ESP32 queue
+    while(buffer != nullptr) {
+        // FIXME this section is redundant and should be generalized toghether with C33EthernetLWIPNetworkInterface::consume_callback
+        // TODO understand if this should be moved into the base class
+        NETIF_STATS_INCREMENT_RX_INTERRUPT_CALLS(this->stats);
+        // NETIF_STATS_RX_TIME_START(this->stats);
+
+        zerocopy_pbuf_t *custom_pbuf = get_zerocopy_pbuf(buffer, dim, free);
+
+        // TODO consider allocating a custom pool for RX or use PBUF_POOL
+        struct pbuf *p = pbuf_alloced_custom(
+            PBUF_RAW, dim, PBUF_RAM, &custom_pbuf->p, buffer, dim);
+
+        err_t err = this->ni.input((struct pbuf*)p, &this->ni);
+        if (err != ERR_OK) {
+            NETIF_STATS_INCREMENT_ERROR(this->stats, err);
+
+            NETIF_STATS_INCREMENT_RX_NI_INPUT_FAILED_CALLS(this->stats);
+            NETIF_STATS_INCREMENT_RX_INTERRUPT_FAILED_CALLS(this->stats);
+            pbuf_free((struct pbuf*)p);
+        } else {
+            NETIF_STATS_INCREMENT_RX_BYTES(this->stats, p->len);
+        }
+
+        buffer = CEspControl::getInstance().getStationRx(if_num, dim);
+        // NETIF_STATS_RX_TIME_AVERAGE(this->stats);
+    }
+    NETIF_STATS_RX_TIME_AVERAGE(this->stats);
+    // arduino::unlock();
+}
+
+const char* SoftAPLWIPNetworkInterface::getSSID() {
+    return (const char*)soft_ap_cfg.ssid;
+}
+
+uint8_t* SoftAPLWIPNetworkInterface::getBSSID(uint8_t* bssid){
+    // CNetUtilities::macStr2macArray(bssid, (const char*)soft_ap_cfg.bssid);
+    // return bssid;
+}
+
+uint8_t SoftAPLWIPNetworkInterface::getEncryptionType() {
+    return Encr2wl_enc(soft_ap_cfg.encryption_mode);
 }
 
 // LWIPNetworkStack
