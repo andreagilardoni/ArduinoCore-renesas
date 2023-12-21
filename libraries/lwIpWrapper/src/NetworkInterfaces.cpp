@@ -275,77 +275,86 @@ void C33EthernetLWIPNetworkInterface::consume_callback(uint8_t* buffer, uint32_t
     } else {
         NETIF_STATS_INCREMENT_RX_BYTES(this->stats, p->len);
     }
-    arduino::unlock();
+    // arduino::unlock();
 }
 
 // WiFIStationLWIPNetworkInterface
 uint8_t WiFIStationLWIPNetworkInterface::wifistation_id = 0;
 
-WiFIStationLWIPNetworkInterface::WiFIStationLWIPNetworkInterface() {
+WiFIStationLWIPNetworkInterface::WiFIStationLWIPNetworkInterface()
+: hw_init(false) {
     // TODO this class should implement the driver interface
     // CLwipIf::getInstance()
 }
 
 int WiFIStationLWIPNetworkInterface::begin() { // TODO This should be called only once, make it private
-    // CEspControl::getInstance().listenForStatioDisconnectEvent(CLwipIf::disconnectEventcb);
-    volatile bool init = false;
+    int res = 0;
+    int time_num = 0;
+
+    // arduino::lock();
     CEspControl::getInstance().listenForStationDisconnectEvent([this] (CCtrlMsgWrapper *resp) -> int {
         netif_set_link_down(&this->ni);
         return ESP_CONTROL_OK;
     });
-    CEspControl::getInstance().listenForInitEvent([&init] (CCtrlMsgWrapper *resp) -> int {
+    CEspControl::getInstance().listenForInitEvent([this] (CCtrlMsgWrapper *resp) -> int {
         // Serial.println("init");
-        init = true;
+        this->hw_init = true;
         return ESP_CONTROL_OK;
     });
 
-    if (CEspControl::getInstance().initSpiDriver() == 0) {
-        // wifi_status = WL_NO_SSID_AVAIL;
+    if ((res=CEspControl::getInstance().initSpiDriver()) != 0) {
+        res = -1; // FIXME put a proper error code
+        goto exit;
     }
 
-    arduino::lock();
-    int time_num = 0;
-    while (time_num < 100 && !init) { // TODO #define WIFI_INIT_TIMEOUT_MS 10000
+    while (time_num < 100 && !hw_init) { // TODO #define WIFI_INIT_TIMEOUT_MS 10000
         CEspControl::getInstance().communicateWithEsp();
         R_BSP_SoftwareDelay(100, BSP_DELAY_UNITS_MILLISECONDS);
         time_num++;
     }
-    arduino::unlock();
 
-    int res = CEspControl::getInstance().setWifiMode(WIFI_MODE_STA);
+    res = CEspControl::getInstance().setWifiMode(WIFI_MODE_STA);
     LWIPNetworkInterface::begin();
-
     // netif_set_link_up(&this->ni); // TODO this should be set only when successfully connected to an AP
+exit:
+    // arduino::unlock();
     return res;
 }
 
 int WiFIStationLWIPNetworkInterface::connectToAP(const char* ssid, const char *passphrase) {
     WifiApCfg_t ap;
-    int rv = ESP_CONTROL_CTRL_ERROR;
+    int rv = ESP_CONTROL_CTRL_ERROR; // FIXME this should be set with an error meaning AP not found
     bool found = false;
-    uint8_t i = 0;
-    arduino::lock();
+    int8_t best_index = -1; // this index is used to find the ap with the best rssi
+    // AccessPoint_t* best_matching_ap;
+    // arduino::lock();
 
-    if(access_points.size() == 0) {
-        this->scanForAp();
+    // if(access_points.size() == 0) {
+    //     this->scanForAp();
+    // }
+    if((rv=this->scanForAp()) != WL_SCAN_COMPLETED) {
+        // rv = -1; // FIXME set proper error code
+        goto exit;
     }
+    this->printAps();
 
-    // FIXME in this way we won't connect to an hidden ssid (are you sure?)
-    for (i = 0; i < access_points.size(); i++) {
-        if (strcmp(ssid, (const char*)access_points[i].ssid) == 0) {
-            break;
+    // find the AP with the best rssi
+    for (uint8_t i = 0; i < access_points.size(); i++) {
+        if(strcmp(ssid, (const char*)access_points[i].ssid) == 0
+            && (best_index == -1 || access_points[best_index].rssi < access_points[i].rssi)
+            ) {
+            best_index=i;
         }
     }
-
-    if(i < access_points.size()) {
-        memset(ap.ssid, 0x00, SSID_LENGTH); // I shouldn't need to zero the ssid string pointer
-        // strncpy((char*)ap.ssid, ssid, SSID_LENGTH);
-        memcpy(ap.ssid, access_points[i].ssid, SSID_LENGTH);
-
+    DEBUG_INFO("best rssi: %d", best_index);
+    if(best_index != -1) {
+        // memset(ap.ssid, 0x00, SSID_LENGTH); // I shouldn't need to zero the ssid string pointer
+        strncpy((char*)ap.ssid, ssid, SSID_LENGTH);
+        // memcpy(ap.ssid, access_points[best_index].ssid, SSID_LENGTH);
 
         // memset(ap.pwd, 0x00, PASSWORD_LENGTH);
-        if(passphrase) {
-            auto slen = strlen(passphrase);
+        if(passphrase != nullptr) {
+            auto slen = strlen(passphrase)+1;
             strncpy((char*)ap.pwd, passphrase, (slen < PASSWORD_LENGTH) ? slen : PASSWORD_LENGTH);
             // memcpy(ap.pwd, passphrase, (slen < PASSWORD_LENGTH) ? slen : PASSWORD_LENGTH);
         } else {
@@ -354,22 +363,38 @@ int WiFIStationLWIPNetworkInterface::connectToAP(const char* ssid, const char *p
         }
 
         memset(ap.bssid, 0x00, BSSID_LENGTH);
-        memcpy(ap.bssid, access_points[i].bssid, BSSID_LENGTH);
+        memcpy(ap.bssid, access_points[best_index].bssid, BSSID_LENGTH);
 
+        // arduino::lock();
         Serial.println("connect begin");
         CEspControl::getInstance().communicateWithEsp(); // TODO make this shared between SoftAP and station
+
+        DEBUG_INFO("connecting to: \"%s\" \"%s\",  %X:%X:%X:%X:%X:%X", ap.ssid, ap.pwd, ap.bssid[0], ap.bssid[1], ap.bssid[2], ap.bssid[3], ap.bssid[4], ap.bssid[5]);
+        rv=CEspControl::getInstance().connectAccessPoint(ap);
+        DEBUG_INFO("res: %d", rv);
         // arduino::unlock();
 
-        if ((rv=CEspControl::getInstance().connectAccessPoint(ap)) == ESP_CONTROL_OK) {
+        if (rv == ESP_CONTROL_OK) {
             CEspControl::getInstance().getAccessPointConfig(access_point_cfg);
+
             netif_set_link_up(&this->ni);
         }
         Serial.println("connect end");
+        // arduino::unlock();
     }
+    // else {
+    //     // TODO return AP not found error
+    // }
 
-    arduino::unlock();
+exit:
+    // arduino::unlock();
 
     return rv;
+}
+
+// disconnect
+int WiFIStationLWIPNetworkInterface::disconnectFromAp() {
+    return CEspControl::getInstance().disconnectAccessPoint();
 }
 
 err_t WiFIStationLWIPNetworkInterface::init(struct netif* ni) {
@@ -454,18 +479,22 @@ void WiFIStationLWIPNetworkInterface::task() {
     uint8_t* buffer = nullptr;
     struct pbuf* p = nullptr;
 
-    arduino::lock();
+    NETIF_STATS_RX_TIME_START(this->stats);
+    // arduino::lock();
     // TODO do not perform this when not connected to an AP
-    CEspControl::getInstance().communicateWithEsp(); // TODO make this shared between SoftAP and station
+    if(hw_init) {
+        CEspControl::getInstance().communicateWithEsp(); // TODO make this shared between SoftAP and station
 
-    // TODO handling buffer this way may be harmful for the memory
-    buffer = CEspControl::getInstance().getStationRx(if_num, dim);
+        // TODO handling buffer this way may be harmful for the memory
+        buffer = CEspControl::getInstance().getStationRx(if_num, dim);
+    }
 
     // empty the ESP32 queue
     while(buffer != nullptr) {
         // FIXME this section is redundant and should be generalized toghether with C33EthernetLWIPNetworkInterface::consume_callback
         // TODO understand if this should be moved into the base class
         NETIF_STATS_INCREMENT_RX_INTERRUPT_CALLS(this->stats);
+        // NETIF_STATS_RX_TIME_START(this->stats);
 
         zerocopy_pbuf_t *custom_pbuf = get_zerocopy_pbuf(buffer, dim, free);
 
@@ -485,8 +514,10 @@ void WiFIStationLWIPNetworkInterface::task() {
         }
 
         buffer = CEspControl::getInstance().getStationRx(if_num, dim);
+        // NETIF_STATS_RX_TIME_AVERAGE(this->stats);
     }
-    arduino::unlock();
+    NETIF_STATS_RX_TIME_AVERAGE(this->stats);
+    // arduino::unlock();
 }
 
 void WiFIStationLWIPNetworkInterface::consume_callback(uint8_t* buffer, uint32_t len) {
@@ -519,14 +550,19 @@ uint8_t WiFIStationLWIPNetworkInterface::getEncryptionType() {
 // }
 
 int WiFIStationLWIPNetworkInterface::scanForAp() {
+    // arduino::lock();
     access_points.clear(); // FIXME create access_points vector
 
     int res = CEspControl::getInstance().getAccessPointScanList(access_points);
     if (res == ESP_CONTROL_OK) {
-        // wifi_status = WL_SCAN_COMPLETED; // TODO
-    } else {
-        // wifi_status = WL_NO_SSID_AVAIL; // TODO
+        res = WL_SCAN_COMPLETED;
     }
+    // else {
+    //     res = WL_NO_SSID_AVAIL; // TODO
+    // }
+
+    // arduino::unlock();
+
     return res;
 }
 
@@ -595,10 +631,7 @@ LWIPNetworkStack::LWIPNetworkStack() {
      * Since this is a constrained environment we could accept performance loss and
      * delegate lwip to handle lost packets.
      */
-    timer.begin(TIMER_MODE_PERIODIC, type, ch, 100.0, 0, timer_cb, this);
-    timer.setup_overflow_irq();
-    timer.open();
-    timer.start();
+    timer.begin(TIMER_MODE_PERIODIC, type, ch, 200.0, 0, timer_cb, this); // TODO make the user decide how to handle these parameters
 #endif
 }
 
@@ -606,6 +639,12 @@ void LWIPNetworkStack::add_iface(LWIPNetworkInterface* iface) {
     // if it is the first interface set it as the default route
     if(this->ifaces.empty()) {
         netif_set_default(&iface->ni); // TODO let the user decide which is the default one
+
+#ifdef NETWORKSTACK_USE_TIMER
+        timer.setup_overflow_irq();
+        timer.open();
+        timer.start();
+#endif
     }
 
     // add the interface if not already present in the vector

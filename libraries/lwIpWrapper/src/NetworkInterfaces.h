@@ -185,12 +185,14 @@ public:
 
     int begin();
     int connectToAP(const char* ssid, const char *passphrase=nullptr);
+    int disconnectFromAp();
     void init();
 
     virtual const char* getSSID();
     virtual uint8_t* getBSSID(uint8_t* bssid);
     virtual int32_t getRSSI();
     virtual uint8_t getEncryptionType();
+
     int scanForAp();
     void printAps();
 
@@ -211,6 +213,7 @@ private:
 
     WifiApCfg_t access_point_cfg;
     std::vector<AccessPoint_t> access_points;
+    bool hw_init; // TODO this should be moved to the wifi driver class
 };
 
 class SoftAPLWIPNetworkInterface: public LWIPNetworkInterface {
