@@ -21,6 +21,7 @@ static void _getHostByNameCBK(const char *name, const ip_addr_t *ipaddr, void *c
 // TODO make better documentation on how this works
 // TODO hostname should be defined at network stack level and shared among ifaces
 // TODO buffer management (allocation/deallocation/trim/etc.) should be properly handled by a wrapper class and be transparent wrt the user
+// TODO the device could be moving and as a consequence it may be nice to rescan APs to get one with the best rssi
 
 typedef struct zerocopy_pbuf {
     struct pbuf_custom p;
@@ -235,25 +236,22 @@ err_t C33EthernetLWIPNetworkInterface::output(struct netif* ni, struct pbuf* p) 
             errval = ERR_IF;
             break;
         }
+        NETIF_STATS_INCREMENT_TX_BYTES(this->stats, q->len);
+        NETIF_STATS_TX_TIME_AVERAGE(this->stats);
         q = q->next;
 
         // FIXME remove this, only purpose is to verify if I ever deal with a pbuf chain
         // if(q!=nullptr) {
         //     NETIF_STATS_INCREMENT_ERROR(this->stats, 1024);
         // }
-        NETIF_STATS_INCREMENT_TX_BYTES(this->stats, q->len);
-        NETIF_STATS_TX_TIME_AVERAGE(this->stats);
     } while(q != nullptr && errval != ERR_OK);
-
-    // arduino::unlock();
 
     return errval;
 }
 
 void C33EthernetLWIPNetworkInterface::consume_callback(uint8_t* buffer, uint32_t len) {
     // TODO understand if this callback can be moved into the base class
-    arduino::lock();
-    NETIF_STATS_INCREMENT_RX_INTERRUPT_CALLS(this->stats);
+    // arduino::lock();
 
     const uint16_t trimmed_size = len;
 
@@ -348,7 +346,6 @@ int WiFIStationLWIPNetworkInterface::connectToAP(const char* ssid, const char *p
             best_index=i;
         }
     }
-    DEBUG_INFO("best rssi: %d", best_index);
     if(best_index != -1) {
         // memset(ap.ssid, 0x00, SSID_LENGTH); // I shouldn't need to zero the ssid string pointer
         strncpy((char*)ap.ssid, ssid, SSID_LENGTH);
@@ -368,12 +365,9 @@ int WiFIStationLWIPNetworkInterface::connectToAP(const char* ssid, const char *p
         memcpy(ap.bssid, access_points[best_index].bssid, BSSID_LENGTH);
 
         // arduino::lock();
-        Serial.println("connect begin");
         CEspControl::getInstance().communicateWithEsp(); // TODO make this shared between SoftAP and station
 
-        DEBUG_INFO("connecting to: \"%s\" \"%s\",  %X:%X:%X:%X:%X:%X", ap.ssid, ap.pwd, ap.bssid[0], ap.bssid[1], ap.bssid[2], ap.bssid[3], ap.bssid[4], ap.bssid[5]);
         rv=CEspControl::getInstance().connectAccessPoint(ap);
-        DEBUG_INFO("res: %d", rv);
         // arduino::unlock();
 
         if (rv == ESP_CONTROL_OK) {
@@ -381,7 +375,6 @@ int WiFIStationLWIPNetworkInterface::connectToAP(const char* ssid, const char *p
 
             netif_set_link_up(&this->ni);
         }
-        Serial.println("connect end");
         // arduino::unlock();
     }
     // else {
@@ -574,7 +567,28 @@ void WiFIStationLWIPNetworkInterface::printAps() {
         Serial.print((char*)ap.ssid);
         Serial.print("\" ");
         Serial.print("rssi: ");
-        Serial.println(ap.rssi);
+        Serial.print(ap.rssi);
+
+        Serial.print(" bssid: ");
+        for(uint8_t i=0; i<BSSID_LENGTH; i++) {
+            if(ap.bssid[i] < 0x10) {
+                Serial.print("0");
+            }
+            Serial.print(ap.bssid[i], HEX);
+            Serial.print(":");
+        }
+        Serial.println();
+        // Serial.print(ap.bssid[0], HEX);
+        // Serial.print(":");
+        // Serial.print(ap.bssid[1], HEX);
+        // Serial.print(":");
+        // Serial.print(ap.bssid[2], HEX);
+        // Serial.print(":");
+        // Serial.print(ap.bssid[3], HEX);
+        // Serial.print(":");
+        // Serial.print(ap.bssid[4], HEX);
+        // Serial.print(":");
+        // Serial.println(ap.bssid[5], HEX);
     }
 }
 
