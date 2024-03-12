@@ -26,6 +26,17 @@ static void _getHostByNameCBK(const char *name, const ip_addr_t *ipaddr, void *c
 static void timer_cb(timer_callback_args_t* arg);
 #endif // LWIP_USE_TIMER
 
+// The following functions are here to protect against malloc not being reentrant
+extern "C" void __malloc_lock(struct _reent *) {
+    arduino::lock();
+    // __disable_irq();
+}
+
+extern "C" void __malloc_unlock(struct _reent *) {
+    arduino::unlock();
+    // __enable_irq();
+}
+
 // Custom Pbuf definition used to handle RX zero copy
 // TODO Move this in a separate file (understand if it is required)
 typedef struct zerocopy_pbuf {
