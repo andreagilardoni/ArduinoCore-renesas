@@ -22,6 +22,17 @@ const char* CWifi::firmwareVersion() {
    return "99.99.99";
 }
 
+/* -------------------------------------------------------------------------- */
+uint32_t CWifi::firmwareVersionU32() {
+/* -------------------------------------------------------------------------- */
+   uint8_t ret[4];
+   string res = "";
+   modem.begin();
+   if(modem.write(string(PROMPT(_FWVERSION_U32)), res, CMD_READ(_FWVERSION_U32))) {
+      return res[0] << 24| res[1] << 16 | res[2] << 8 | res[3];
+   }
+   return 0x63636300;
+}
 
 /* -------------------------------------------------------------------------- */
 int CWifi::begin(const char* ssid) {
